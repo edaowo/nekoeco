@@ -1,5 +1,6 @@
 package com.example.nekoeco.ui.customer
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 
@@ -20,17 +22,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Inventory2
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.TaskAlt
 
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,9 +38,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+import com.example.nekoeco.R
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -79,10 +82,7 @@ data class CustomerHomeUiState(
 
     val upcomingAppointments:
     List<CustomerAppointment> =
-        emptyList(),
-
-    val showLogoutDialog: Boolean =
-        false
+        emptyList()
 )
 
 
@@ -93,12 +93,6 @@ data class CustomerHomeUiState(
 sealed interface CustomerHomeEvent {
 
     data object RefreshHome :
-        CustomerHomeEvent
-
-    data object LogoutClicked :
-        CustomerHomeEvent
-
-    data object DismissLogout :
         CustomerHomeEvent
 }
 
@@ -134,28 +128,6 @@ class CustomerHomeViewModel : ViewModel() {
             CustomerHomeEvent.RefreshHome -> {
 
                 refreshHome()
-            }
-
-
-            CustomerHomeEvent.LogoutClicked -> {
-
-                _uiState.update {
-
-                    it.copy(
-                        showLogoutDialog = true
-                    )
-                }
-            }
-
-
-            CustomerHomeEvent.DismissLogout -> {
-
-                _uiState.update {
-
-                    it.copy(
-                        showLogoutDialog = false
-                    )
-                }
             }
         }
     }
@@ -265,16 +237,9 @@ class CustomerHomeViewModel : ViewModel() {
 @Composable
 fun CustomerHomeScreen(
 
-    onDevicesClick: () -> Unit,
-
-    onAiScanClick: () -> Unit,
-
     onAppointmentsClick: () -> Unit,
 
-    onLogout: () -> Unit,
-
-    bottomNavActions:
-    List<BottomNavAction>,
+    onProfileClick: () -> Unit = {},
 
     viewModel: CustomerHomeViewModel =
         viewModel()
@@ -288,10 +253,35 @@ fun CustomerHomeScreen(
 
 
     // ========================================================
-    // REFRESH WHEN HOME IS OPENED
+    // Subscribe to CustomerDataStore.dataVersion in the
+    // composable body so Compose's snapshot system reliably
+    // tracks the read. The LaunchedEffect below also reads
+    // dataVersion, but if the home screen's body never reads
+    // it directly, Compose can skip recomposing this
+    // composable when the value changes — and the
+    // LaunchedEffect's key wouldn't fire because it was
+    // captured at initial composition.
+    //
+    // Reading it here forces a recomposition on every change,
+    // which in turn re-evaluates the LaunchedEffect's key
+    // and fires the refresh.
     // ========================================================
 
-    LaunchedEffect(Unit) {
+    val dataVersion = CustomerDataStore.dataVersion
+    @Suppress("UNUSED_EXPRESSION")
+    dataVersion
+
+
+    // ========================================================
+    // REFRESH WHEN HOME IS OPENED
+    //
+    // Keyed on CustomerDataStore.dataVersion so we re-read
+    // our viewmodel snapshot every time the in-memory caches
+    // are repopulated — e.g. after loadForCustomer completes
+    // on app launch.
+    // ========================================================
+
+    LaunchedEffect(CustomerDataStore.dataVersion) {
 
         viewModel.onEvent(
             CustomerHomeEvent.RefreshHome
@@ -323,25 +313,89 @@ fun CustomerHomeScreen(
 
 
         // ====================================================
-        // GREETING
+        // GREETING + PROFILE ENTRY
         // ====================================================
 
-        Text(
+        Row(
+            modifier =
+                Modifier.fillMaxWidth(),
 
-            text =
-                "Hello, ${uiState.customerName} 👋",
+            horizontalArrangement =
+                Arrangement.SpaceBetween,
 
-            fontSize =
-                26.sp,
+            verticalAlignment =
+                Alignment.CenterVertically
+        ) {
 
-            fontWeight =
-                FontWeight.Bold,
+            Text(
 
-            color =
-                MaterialTheme
-                    .colorScheme
-                    .onBackground
-        )
+                text =
+                    "Hello, ${uiState.customerName} 👋",
+
+                fontSize =
+                    26.sp,
+
+                fontWeight =
+                    FontWeight.Bold,
+
+                color =
+                    MaterialTheme
+                        .colorScheme
+                        .onBackground,
+
+                // Long names wrap/ellipsis instead of
+                // pushing the profile circle off-screen.
+
+                modifier =
+                    Modifier.weight(1f),
+
+                maxLines =
+                    2,
+
+                overflow =
+                    TextOverflow.Ellipsis
+            )
+
+
+            Card(
+
+                modifier =
+                    Modifier
+                        .size(44.dp)
+                        .clickable {
+                            onProfileClick()
+                        },
+
+                shape =
+                    CircleShape,
+
+                colors =
+                    CardDefaults.cardColors(
+                        containerColor =
+                            MaterialTheme
+                                .colorScheme
+                                .surface
+                    )
+            ) {
+
+                Image(
+                    painter =
+                        painterResource(
+                            R.drawable.profile_customer
+                        ),
+
+                    contentDescription =
+                        "Profile",
+
+                    contentScale =
+                        ContentScale.Crop,
+
+                    modifier =
+                        Modifier.fillMaxSize()
+                )
+            }
+        }
+
 
 
         Spacer(
@@ -372,11 +426,17 @@ fun CustomerHomeScreen(
 
 
         // ====================================================
-        // SUMMARY ROW 1
+        Spacer(
+            modifier =
+                Modifier.height(20.dp)
+        )
+
+
+        // ====================================================
+        // STATISTICS ROW 1
         // ====================================================
 
         Row(
-
             modifier =
                 Modifier.fillMaxWidth(),
 
@@ -385,61 +445,28 @@ fun CustomerHomeScreen(
         ) {
 
             CustomerSummaryCard(
-
-                title =
-                    "Appointments",
-
+                title = "Appointments",
                 value =
                     uiState
                         .appointmentCount
                         .toString(),
-
-                subtitle =
-                    "appointments",
-
-                icon =
-                    Icons.Default.CalendarMonth,
-
-                iconTint =
-                    Color(0xFF5B7CFA),
-
-                iconBackground =
-                    Color(0xFFEAF0FF),
-
-                modifier =
-                    Modifier.weight(1f)
+                icon = Icons.Default.CalendarMonth,
+                iconTint = Color(0xFF5B7CFA),
+                iconBackground = Color(0xFFEAF0FF),
+                modifier = Modifier.weight(1f)
             )
 
 
             CustomerSummaryCard(
-
-                title =
-                    "Pending",
-
+                title = "Pending",
                 value =
                     uiState
                         .pendingDeviceCount
                         .toString(),
-
-                subtitle =
-                    "pending devices",
-
-                icon =
-                    Icons.Default.Inventory2,
-
-                iconTint =
-                    Color(0xFF8B5CF6),
-
-                iconBackground =
-                    Color(0xFFF1EBFF),
-
-                modifier =
-                    Modifier
-                        .weight(1f)
-                        .clickable {
-
-                            onDevicesClick()
-                        }
+                icon = Icons.Default.Inventory2,
+                iconTint = Color(0xFF8B5CF6),
+                iconBackground = Color(0xFFF1EBFF),
+                modifier = Modifier.weight(1f)
             )
         }
 
@@ -451,11 +478,10 @@ fun CustomerHomeScreen(
 
 
         // ====================================================
-        // SUMMARY ROW 2
+        // STATISTICS ROW 2
         // ====================================================
 
         Row(
-
             modifier =
                 Modifier.fillMaxWidth(),
 
@@ -464,56 +490,28 @@ fun CustomerHomeScreen(
         ) {
 
             CustomerSummaryCard(
-
-                title =
-                    "Completed\nPickups",
-
+                title = "Completed\nPickups",
                 value =
                     uiState
                         .completedPickupCount
                         .toString(),
-
-                subtitle =
-                    "completed",
-
-                icon =
-                    Icons.Default.TaskAlt,
-
-                iconTint =
-                    Color(0xFF3FA772),
-
-                iconBackground =
-                    Color(0xFFE7F8F0),
-
-                modifier =
-                    Modifier.weight(1f)
+                icon = Icons.Default.TaskAlt,
+                iconTint = Color(0xFF3FA772),
+                iconBackground = Color(0xFFE7F8F0),
+                modifier = Modifier.weight(1f)
             )
 
 
             CustomerSummaryCard(
-
-                title =
-                    "Total Received",
-
+                title = "Total Received",
                 value =
-                    "RM %.0f".format(
+                    "RM %.2f".format(
                         uiState.totalReceived
                     ),
-
-                subtitle =
-                    "total payment",
-
-                icon =
-                    Icons.Default.CreditCard,
-
-                iconTint =
-                    Color(0xFFE09B30),
-
-                iconBackground =
-                    Color(0xFFFFF3DF),
-
-                modifier =
-                    Modifier.weight(1f)
+                icon = Icons.Default.CreditCard,
+                iconTint = Color(0xFFE09B30),
+                iconBackground = Color(0xFFFFF3DF),
+                modifier = Modifier.weight(1f)
             )
         }
 
@@ -640,198 +638,6 @@ fun CustomerHomeScreen(
         )
 
 
-        // ====================================================
-        // LOGOUT CARD
-        // ====================================================
-
-        Card(
-
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-
-                        viewModel.onEvent(
-                            CustomerHomeEvent
-                                .LogoutClicked
-                        )
-                    },
-
-            shape =
-                RoundedCornerShape(16.dp),
-
-            colors =
-                CardDefaults.cardColors(
-                    containerColor =
-                        MaterialTheme
-                            .colorScheme
-                            .surface
-                ),
-
-            elevation =
-                CardDefaults.cardElevation(
-                    defaultElevation =
-                        1.dp
-                )
-        ) {
-
-            Row(
-
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(18.dp),
-
-                verticalAlignment =
-                    Alignment.CenterVertically
-            ) {
-
-                Icon(
-
-                    imageVector =
-                        Icons.Default.Logout,
-
-                    contentDescription =
-                        "Logout",
-
-                    modifier =
-                        Modifier.size(27.dp),
-
-                    tint =
-                        MaterialTheme
-                            .colorScheme
-                            .error
-                )
-
-
-                Spacer(
-                    modifier =
-                        Modifier.width(15.dp)
-                )
-
-
-                Column {
-
-                    Text(
-
-                        text =
-                            "Logout",
-
-                        fontSize =
-                            16.sp,
-
-                        fontWeight =
-                            FontWeight.SemiBold
-                    )
-
-
-                    Spacer(
-                        modifier =
-                            Modifier.height(2.dp)
-                    )
-
-
-                    Text(
-
-                        text =
-                            "Sign out of your account",
-
-                        fontSize =
-                            13.sp,
-
-                        color =
-                            MaterialTheme
-                                .colorScheme
-                                .onSurfaceVariant
-                    )
-                }
-            }
-        }
-
-
-        Spacer(
-            modifier =
-                Modifier.height(20.dp)
-        )
-    }
-
-
-    // ========================================================
-    // LOGOUT DIALOG
-    // ========================================================
-
-    if (
-        uiState.showLogoutDialog
-    ) {
-
-        AlertDialog(
-
-            onDismissRequest = {
-
-                viewModel.onEvent(
-                    CustomerHomeEvent
-                        .DismissLogout
-                )
-            },
-
-            title = {
-
-                Text(
-                    text =
-                        "Logout"
-                )
-            },
-
-            text = {
-
-                Text(
-                    text =
-                        "Are you sure you want to logout?"
-                )
-            },
-
-            confirmButton = {
-
-                Button(
-
-                    onClick = {
-
-                        viewModel.onEvent(
-                            CustomerHomeEvent
-                                .DismissLogout
-                        )
-
-                        onLogout()
-                    }
-                ) {
-
-                    Text(
-                        text =
-                            "Logout"
-                    )
-                }
-            },
-
-            dismissButton = {
-
-                TextButton(
-
-                    onClick = {
-
-                        viewModel.onEvent(
-                            CustomerHomeEvent
-                                .DismissLogout
-                        )
-                    }
-                ) {
-
-                    Text(
-                        text =
-                            "Cancel"
-                    )
-                }
-            }
-        )
     }
 }
 
@@ -846,8 +652,6 @@ fun CustomerSummaryCard(
     title: String,
 
     value: String,
-
-    subtitle: String,
 
     icon: ImageVector,
 
@@ -885,7 +689,7 @@ fun CustomerSummaryCard(
 
         Column(
             modifier =
-                Modifier.padding(15.dp)
+                Modifier.padding(10.dp)
         ) {
 
             Row(
@@ -906,10 +710,10 @@ fun CustomerSummaryCard(
                         title,
 
                     fontSize =
-                        14.sp,
+                        13.sp,
 
                     lineHeight =
-                        15.sp,
+                        14.sp,
 
                     color =
                         MaterialTheme
@@ -921,7 +725,7 @@ fun CustomerSummaryCard(
                 Card(
 
                     shape =
-                        RoundedCornerShape(9.dp),
+                        RoundedCornerShape(8.dp),
 
                     colors =
                         CardDefaults.cardColors(
@@ -940,8 +744,8 @@ fun CustomerSummaryCard(
 
                         modifier =
                             Modifier
-                                .padding(7.dp)
-                                .size(22.dp),
+                                .padding(5.dp)
+                                .size(18.dp),
 
                         tint =
                             iconTint
@@ -952,7 +756,7 @@ fun CustomerSummaryCard(
 
             Spacer(
                 modifier =
-                    Modifier.height(12.dp)
+                    Modifier.height(6.dp)
             )
 
 
@@ -962,7 +766,7 @@ fun CustomerSummaryCard(
                     value,
 
                 fontSize =
-                    21.sp,
+                    18.sp,
 
                 fontWeight =
                     FontWeight.Bold,
@@ -971,27 +775,6 @@ fun CustomerSummaryCard(
                     MaterialTheme
                         .colorScheme
                         .onSurface
-            )
-
-
-            Spacer(
-                modifier =
-                    Modifier.height(2.dp)
-            )
-
-
-            Text(
-
-                text =
-                    subtitle,
-
-                fontSize =
-                    13.sp,
-
-                color =
-                    MaterialTheme
-                        .colorScheme
-                        .onSurfaceVariant
             )
         }
     }

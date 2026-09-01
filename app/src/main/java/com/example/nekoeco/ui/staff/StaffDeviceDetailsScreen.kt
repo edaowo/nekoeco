@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -18,7 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 
 import androidx.compose.material3.AlertDialog
@@ -26,8 +27,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,7 +57,9 @@ fun StaffDeviceDetailsScreen(
 
     showDeleteDialog: Boolean,
 
-    showStatusMenu: Boolean,
+    // Component names currently ticked in the
+    // inspection checkboxes (owned by the ViewModel).
+    inspectionSelection: Set<String>,
 
     onEvent: (StaffDevicesEvent) -> Unit
 
@@ -500,12 +502,76 @@ fun StaffDeviceDetailsScreen(
 
                 } else {
 
+                    // =========================================
+                    // SELECT ALL
+                    // =========================================
+
+                    Row(
+                        modifier =
+                            Modifier.fillMaxWidth(),
+
+                        verticalAlignment =
+                            Alignment.CenterVertically
+                    ) {
+
+                        Checkbox(
+                            checked =
+
+                                inspectionSelection.size ==
+                                        device.components.size,
+
+                            onCheckedChange = { checked ->
+
+                                onEvent(
+                                    StaffDevicesEvent
+                                        .InspectionSelectAll(
+                                            selected =
+                                                checked
+                                        )
+                                )
+                            }
+                        )
+
+
+                        Text(
+                            text =
+                                "Select all parts",
+
+                            fontSize =
+                                13.sp,
+
+                            fontWeight =
+                                FontWeight.Bold,
+
+                            modifier =
+                                Modifier.weight(1f)
+                        )
+                    }
+
+
                     device.components
                         .forEach { component ->
 
                             StaffInspectionComponentRow(
                                 component =
-                                    component
+                                    component,
+
+                                approved =
+
+                                    inspectionSelection.contains(
+                                        component.name
+                                    ),
+
+                                onToggle = {
+
+                                    onEvent(
+                                        StaffDevicesEvent
+                                            .InspectionToggled(
+                                                componentName =
+                                                    component.name
+                                            )
+                                    )
+                                }
                             )
                         }
                 }
@@ -616,6 +682,46 @@ fun StaffDeviceDetailsScreen(
                     )
 
 
+                    // =========================================
+                    // LIVE APPROVED TOTAL
+                    //
+                    // What the company will actually pay
+                    // for, based on the current checkbox
+                    // selection — saved to the device when
+                    // the staff approves it.
+                    // =========================================
+
+                    val approvedTotal =
+                        device.components
+                            .filter {
+
+                                inspectionSelection.contains(
+                                    it.name
+                                )
+                            }
+                            .sumOf { component ->
+
+                                component.price
+                                    .replace(
+                                        Regex("[^0-9.]"),
+                                        ""
+                                    )
+                                    .toDoubleOrNull()
+                                    ?: 0.0
+                            }
+
+
+                    DetailRow(
+                        label =
+                            "Approved Total",
+
+                        value =
+                            "RM %.2f".format(
+                                approvedTotal
+                            )
+                    )
+
+
                     DetailRow(
                         label =
                             "Recovery Value",
@@ -624,142 +730,6 @@ fun StaffDeviceDetailsScreen(
                             device.recoveryValue
                     )
                 }
-            }
-
-
-            Spacer(
-                modifier =
-                    Modifier.height(18.dp)
-            )
-
-
-            // =================================================
-            // UPDATE STATUS
-            // =================================================
-
-            SectionTitle(
-                title =
-                    "Update Status"
-            )
-
-
-            OutlinedButton(
-
-                onClick = {
-
-                    onEvent(
-                        StaffDevicesEvent
-                            .OpenStatusMenu
-                    )
-                },
-
-                modifier =
-                    Modifier.fillMaxWidth(),
-
-                shape =
-                    RoundedCornerShape(14.dp)
-            ) {
-
-                Icon(
-                    imageVector =
-                        Icons.Default.Edit,
-
-                    contentDescription =
-                        null
-                )
-
-
-                Spacer(
-                    modifier =
-                        Modifier.size(8.dp)
-                )
-
-
-                Text(
-                    text =
-                        "Change Status"
-                )
-            }
-
-
-            DropdownMenu(
-
-                expanded =
-                    showStatusMenu,
-
-                onDismissRequest = {
-
-                    onEvent(
-                        StaffDevicesEvent
-                            .DismissStatusMenu
-                    )
-                }
-            ) {
-
-                DropdownMenuItem(
-
-                    text = {
-
-                        Text(
-                            text =
-                                "Pending"
-                        )
-                    },
-
-                    onClick = {
-
-                        onEvent(
-                            StaffDevicesEvent
-                                .StatusChanged(
-                                    "Pending"
-                                )
-                        )
-                    }
-                )
-
-
-                DropdownMenuItem(
-
-                    text = {
-
-                        Text(
-                            text =
-                                "Approved"
-                        )
-                    },
-
-                    onClick = {
-
-                        onEvent(
-                            StaffDevicesEvent
-                                .StatusChanged(
-                                    "Approved"
-                                )
-                        )
-                    }
-                )
-
-
-                DropdownMenuItem(
-
-                    text = {
-
-                        Text(
-                            text =
-                                "Rejected"
-                        )
-                    },
-
-                    onClick = {
-
-                        onEvent(
-                            StaffDevicesEvent
-                                .StatusChanged(
-                                    "Rejected"
-                                )
-                        )
-                    }
-                )
             }
 
 
@@ -794,7 +764,16 @@ fun StaffDeviceDetailsScreen(
                         Modifier.fillMaxWidth(),
 
                     shape =
-                        RoundedCornerShape(14.dp)
+                        RoundedCornerShape(14.dp),
+
+                    // Approving with zero parts ticked
+                    // would save an RM 0 device — require
+                    // at least one part, or a rejection.
+
+                    enabled =
+
+                        device.components.isEmpty() ||
+                                inspectionSelection.isNotEmpty()
                 ) {
 
                     Text(
@@ -803,6 +782,102 @@ fun StaffDeviceDetailsScreen(
 
                         fontSize =
                             15.sp
+                    )
+                }
+
+
+                if (
+                    device.components.isNotEmpty() &&
+                    inspectionSelection.isEmpty()
+                ) {
+
+                    Spacer(
+                        modifier =
+                            Modifier.height(8.dp)
+                    )
+
+
+                    Text(
+                        text =
+                            "Tick at least one part to approve — otherwise use Reject.",
+
+                        fontSize =
+                            11.sp,
+
+                        color =
+                            MaterialTheme
+                                .colorScheme
+                                .onSurfaceVariant
+                    )
+                }
+
+
+                Spacer(
+                    modifier =
+                        Modifier.height(10.dp)
+                )
+            }
+
+
+            // =================================================
+            // SET TO PENDING
+            //
+            // Devices start Pending automatically at booking;
+            // this reverts an Approved/Rejected device back to
+            // Pending (updateDeviceStatus cancels its non-
+            // completed appointment and resets the payment).
+            // =================================================
+
+            if (
+                currentStatus == "Approved" ||
+                currentStatus == "Rejected"
+            ) {
+
+                TextButton(
+
+                    onClick = {
+
+                        onEvent(
+                            StaffDevicesEvent
+                                .StatusChanged(
+                                    "Pending"
+                                )
+                        )
+                    },
+
+                    modifier =
+                        Modifier.fillMaxWidth()
+                ) {
+
+                    Icon(
+                        imageVector =
+                            Icons.Default.Refresh,
+
+                        contentDescription =
+                            null,
+
+                        modifier =
+                            Modifier.size(18.dp)
+                    )
+
+
+                    Spacer(
+                        modifier =
+                            Modifier.width(8.dp)
+                    )
+
+
+                    Text(
+                        text =
+                            "Set to Pending",
+
+                        fontSize =
+                            13.sp,
+
+                        color =
+                            MaterialTheme
+                                .colorScheme
+                                .onSurfaceVariant
                     )
                 }
 
@@ -1053,7 +1128,13 @@ fun StaffDeviceDetailsScreen(
 @Composable
 fun StaffInspectionComponentRow(
 
-    component: StaffComponent
+    component: StaffComponent,
+
+    // Whether the company will recover this part —
+    // rendered as the row's checkbox.
+    approved: Boolean,
+
+    onToggle: () -> Unit
 
 ) {
 
@@ -1075,6 +1156,17 @@ fun StaffInspectionComponentRow(
             verticalAlignment =
                 Alignment.CenterVertically
         ) {
+
+            Checkbox(
+                checked =
+                    approved,
+
+                onCheckedChange = {
+
+                    onToggle()
+                }
+            )
+
 
             Icon(
                 imageVector =

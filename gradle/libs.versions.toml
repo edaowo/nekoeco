@@ -12,6 +12,8 @@ navigationCompose = "2.9.8"
 ui = "1.12.0"
 material3 = "1.4.0"
 foundationLayout = "1.12.0"
+supabase = "3.1.4"
+ktor = "3.1.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -47,7 +49,13 @@ androidx-ui = { group = "androidx.compose.ui", name = "ui", version.ref = "ui" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
 androidx-compose-foundation-layout = { group = "androidx.compose.foundation", name = "foundation-layout", version.ref = "foundationLayout" }
 
+supabase-core = { group = "io.github.jan-tennert.supabase", name = "supabase-kt" }
+supabase-postgrest = { group = "io.github.jan-tennert.supabase", name = "postgrest-kt" }
+ktor-client-android = { group = "io.ktor", name = "ktor-client-android", version.ref = "ktor" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

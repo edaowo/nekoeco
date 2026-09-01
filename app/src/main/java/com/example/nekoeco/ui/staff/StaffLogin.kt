@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -43,10 +45,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
+import android.util.Log
+
+import com.example.nekoeco.data.auth.AuthRepo
+import com.example.nekoeco.data.auth.PasswordHasher
+import com.example.nekoeco.data.auth.SessionPreferences
+
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.runBlocking
 
 
 // ============================================================
@@ -59,7 +68,13 @@ data class StaffAccount(
 
     val name: String,
 
-    var password: String
+    var password: String,
+
+    // The user's UUID in the users table. Cached at login
+    // so warm launches can skip the findStaff round-trip
+    // and call loadAll() directly. null for sessions
+    // persisted before this field existed.
+    val recordId: String? = null
 )
 
 
@@ -69,46 +84,186 @@ data class StaffAccount(
 
 object StaffAccounts {
 
-    val accounts =
-        mutableListOf(
 
-            StaffAccount(
-                staffId = "ST001",
-                name = "VQ",
-                password = "122507"
-            ),
+    // ========================================================
+    // Currently-logged-in staff member. Populated by login()
+    // and cleared by logout(). Mirrors the
+    // CustomerDataStore.currentCustomer pattern.
+    //
+    // Note: there is no in-memory identity elsewhere in the
+    // staff app (the staff UI operates over the global
+    // CustomerDataStore.appointments / .devices directly), so
+    // this field exists primarily for session-restore parity
+    // with the customer side and to give the UI a place to
+    // show who is signed in if it ever needs to.
+    // ========================================================
 
-            StaffAccount(
-                staffId = "ST002",
-                name = "XL",
-                password = "123123"
-            ),
+    var currentStaff: StaffAccount? = null
 
-            StaffAccount(
-                staffId = "ST003",
-                name = "PY",
-                password = "271199"
-            ),
 
-            StaffAccount(
-                staffId = "ST004",
-                name = "EDA",
-                password = "123456"
+    // ========================================================
+    // UPDATE STAFF NAME — used by the staff profile screen.
+    // Writes through to Supabase (users table) and keeps
+    // the in-memory session account in sync.
+    // ========================================================
+
+    fun updateStaffName(
+        newName: String
+    ) {
+
+        val cleanName =
+            newName.trim()
+
+
+        if (cleanName.isBlank()) {
+
+            return
+        }
+
+
+        val staff =
+            currentStaff
+                ?: return
+
+
+        val recordId =
+            staff.recordId
+                ?: return
+
+
+        try {
+
+            val updated =
+
+                runBlocking {
+
+                    AuthRepo.instance.updateStaffName(
+                        recordId =
+                            recordId,
+
+                        newName =
+                            cleanName
+                    )
+                }
+
+
+            if (!updated) {
+
+                return
+            }
+
+
+            currentStaff =
+                staff.copy(
+                    name = cleanName
+                )
+
+
+            // Keep the cached session name in sync too
+            // (the restore path re-fetches from the DB,
+            // but the cache should not go stale).
+
+            SessionPreferences.persistStaff(
+                staffId = staff.staffId,
+                name = cleanName,
+                recordId = recordId
             )
-        )
+
+        } catch (t: Throwable) {
+
+            Log.e(
+                "NekoEcoAuth",
+                "updateStaffName failed",
+                t
+            )
+        }
+    }
 
 
     fun findStaff(
         staffId: String
     ): StaffAccount? {
 
-        return accounts.find {
+        Log.d("NekoEcoAuth", "findStaff: id=${staffId.trim()}")
 
-            it.staffId.equals(
-                staffId,
-                ignoreCase = true
-            )
+        val row = try {
+
+            runBlocking {
+
+                AuthRepo.instance.findStaffById(
+                    staffId.trim()
+                )
+            }
+        } catch (t: Throwable) {
+
+            // ================================================
+            // Catch everything so the app can't crash from the
+            // main-thread onClick that called us. Log it and
+            // return null so the existing "Staff ID or Staff
+            // Name is incorrect." UI text shows.
+            // ================================================
+
+            Log.e("NekoEcoAuth", "findStaff failed", t)
+            return null
         }
+
+
+        if (row == null) {
+
+            Log.d("NekoEcoAuth", "findStaff: no row")
+            return null
+        }
+
+
+        return StaffAccount(
+
+            staffId = row.staffId ?: return null,
+
+            name = row.name,
+
+            password = "",
+
+            recordId = row.id
+        )
+    }
+
+
+    // ========================================================
+    // WARM-LAUNCH FALLBACK
+    //
+    // When the persisted session has a cached record UUID we
+    // skip the findStaff Supabase round-trip. We can't
+    // re-hydrate the display name from the cache (we don't
+    // persist it yet) so we leave it empty — the staff home
+    // doesn't currently render it, so this is invisible to
+    // the user. If a future staff UI needs the name, do a
+    // single fast findStaffById lookup here.
+    // ========================================================
+
+    fun findStaffByIdFallback(
+        cachedId: String,
+        staffId: String
+    ): StaffAccount {
+
+        // ================================================
+        // The staff profile screen renders the display
+        // name, so re-hydrate it from the database with a
+        // single findStaffById lookup. On failure (network
+        // down etc.) fall back to the empty-name account —
+        // the profile then shows the staff ID only.
+        // ================================================
+
+        return findStaff(staffId.trim())
+            ?: StaffAccount(
+
+                staffId = staffId,
+
+                name = "",
+
+                password = "",
+
+                recordId = cachedId
+            )
     }
 
 
@@ -120,14 +275,75 @@ object StaffAccounts {
 
     ): Boolean {
 
-        val staff =
-            findStaff(
-                staffId
+        Log.d(
+            "NekoEcoAuth",
+            "Staff login attempt: id=${staffId.trim()}"
+        )
+
+
+        val match = try {
+
+            runBlocking {
+
+                AuthRepo.instance.findStaffByIdAndHash(
+
+                    staffId = staffId.trim(),
+
+                    hash = PasswordHasher.sha256(password)
+                )
+            }
+        } catch (t: Throwable) {
+
+            Log.e("NekoEcoAuth", "Staff login failed", t)
+            return false
+        }
+
+
+        val ok = match != null
+        Log.d("NekoEcoAuth", "Staff login result: $ok")
+
+
+        // =====================================================
+        // Persist this login (after a fresh DB lookup that
+        // gives us the full StaffAccount record) so a fresh
+        // app launch can skip past the role-selection screen
+        // and land directly on staff_home.
+        // =====================================================
+
+        if (ok) {
+
+            val account = findStaff(
+                staffId.trim()
             )
 
+            currentStaff = account
 
-        return staff != null &&
-                staff.password == password
+            account?.staffId?.let { sid ->
+
+                SessionPreferences.persistStaff(
+                    staffId = sid,
+                    name = account.name,
+                    recordId = account.recordId
+                )
+            }
+        }
+
+
+        return ok
+    }
+
+
+    // ========================================================
+    // Clear the in-memory staff session AND the persisted
+    // SharedPreferences entry so the next app launch goes
+    // through role_selection.
+    // ========================================================
+
+    fun logout() {
+
+        currentStaff = null
+
+        SessionPreferences.clear()
     }
 
 
@@ -139,22 +355,34 @@ object StaffAccounts {
 
     ): Boolean {
 
-        val staff =
-            findStaff(
-                staffId
-            )
+        // ========================================================
+        // The forgot-password dialog asks for staff ID + staff
+        // name to verify ownership. We look up the staff row by
+        // ID first to get the canonical name, then pass both into
+        // the repository's UPDATE so a wrong name returns 0 rows.
+        // ========================================================
+
+        val staff = findStaff(staffId) ?: return false
 
 
-        if (staff != null) {
+        return try {
 
-            staff.password =
-                newPassword
+            runBlocking {
 
-            return true
+                AuthRepo.instance.updateStaffPassword(
+
+                    staffId = staff.staffId,
+
+                    name = staff.name,
+
+                    hash = PasswordHasher.sha256(newPassword)
+                )
+            }
+        } catch (t: Throwable) {
+
+            Log.e("NekoEcoAuth", "Staff password reset failed", t)
+            false
         }
-
-
-        return false
     }
 }
 
@@ -823,49 +1051,16 @@ fun StaffLoginScreen(
         modifier =
             Modifier
                 .fillMaxSize()
-                .padding(24.dp)
-    ) {
-
-
-        // ====================================================
-        // BACK
-        // ====================================================
-
-        Row(
-
-            modifier =
-                Modifier.fillMaxWidth(),
-
-            horizontalArrangement =
-                Arrangement.Start,
-
-            verticalAlignment =
-                Alignment.CenterVertically
-        ) {
-
-            IconButton(
-                onClick =
-                    onBackClick
-            ) {
-
-                Icon(
-
-                    imageVector =
-                        Icons.AutoMirrored
-                            .Filled
-                            .ArrowBack,
-
-                    contentDescription =
-                        "Back"
+                .verticalScroll(
+                    rememberScrollState()
                 )
-            }
-        }
+                .padding(24.dp),
 
+        // Same centred layout as the customer login.
 
-        Spacer(
-            modifier =
-                Modifier.height(30.dp)
-        )
+        verticalArrangement =
+            Arrangement.Center
+    ) {
 
 
         // ====================================================
@@ -1149,25 +1344,11 @@ fun StaffLoginScreen(
             },
 
             modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(55.dp),
-
-            shape =
-                RoundedCornerShape(16.dp)
-
+                Modifier.fillMaxWidth()
         ) {
 
             Text(
-
-                text =
-                    "LOGIN",
-
-                fontSize =
-                    16.sp,
-
-                fontWeight =
-                    FontWeight.Bold
+                text = "Login"
             )
         }
 
@@ -1206,6 +1387,28 @@ fun StaffLoginScreen(
                     MaterialTheme
                         .colorScheme
                         .primary
+            )
+        }
+
+
+        // ====================================================
+        // BACK
+        //
+        // Below Forgot Password, same style as the
+        // customer login's back button.
+        // ====================================================
+
+        TextButton(
+
+            onClick =
+                onBackClick,
+
+            modifier =
+                Modifier.fillMaxWidth()
+        ) {
+
+            Text(
+                text = "← Back"
             )
         }
     }

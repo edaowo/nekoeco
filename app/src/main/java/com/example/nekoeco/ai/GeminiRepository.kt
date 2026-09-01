@@ -2,6 +2,7 @@ package com.example.nekoeco.ai
 
 import android.util.Base64
 import com.example.nekoeco.BuildConfig
+import com.example.nekoeco.data.auth.supabaseSecret.GEMINI_API_KEY
 import com.google.gson.Gson
 import java.io.File
 
@@ -21,7 +22,7 @@ class GeminiRepository(
             )
         }
 
-        if (BuildConfig.GEMINI_API_KEY.isBlank()) {
+        if (GEMINI_API_KEY.isBlank()) {
             throw Exception(
                 "Gemini API key is missing."
             )
@@ -66,7 +67,7 @@ class GeminiRepository(
 
             val response =
                 apiService.generateContent(
-                    apiKey = BuildConfig.GEMINI_API_KEY,
+                    apiKey = GEMINI_API_KEY,
                     request = request
                 )
 

@@ -1,6 +1,7 @@
 package com.example.nekoeco.ui.customer
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,7 +16,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CreditCard
@@ -42,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -300,7 +305,22 @@ fun CustomerPaymentsScreen(
         .collectAsStateWithLifecycle()
 
 
-    LaunchedEffect(Unit) {
+    // Force a subscription on dataVersion in the composable
+    // body so the LaunchedEffect below reliably re-fires when
+    // loadForCustomer completes (otherwise Compose can skip
+    // recomposing this composable on dataVersion changes and
+    // the effect's captured key stays stale).
+    val dataVersion = CustomerDataStore.dataVersion
+    @Suppress("UNUSED_EXPRESSION")
+    dataVersion
+
+
+    // Keyed on CustomerDataStore.dataVersion so this re-fires
+    // every time the in-memory caches are repopulated —
+    // without it, LaunchedEffect(Unit) only runs once per
+    // composable lifetime and the screen renders stale until
+    // the user switches tabs.
+    LaunchedEffect(CustomerDataStore.dataVersion) {
 
         viewModel.onEvent(
             CustomerPaymentsEvent
@@ -388,57 +408,64 @@ fun CustomerPaymentsScreen(
                     uiState.totalPaid,
 
                 pendingAmount =
-                    uiState.pendingAmount,
-
-                totalTransactions =
-                    uiState.totalTransactions
+                    uiState.pendingAmount
             )
         }
 
 
         item {
 
-            OutlinedTextField(
-
-                value =
-                    uiState.searchText,
-
-                onValueChange = {
-
-                    viewModel.onEvent(
-                        CustomerPaymentsEvent
-                            .SearchChanged(it)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outline,
+                        shape = RoundedCornerShape(14.dp)
                     )
-                },
-
-                modifier =
-                    Modifier.fillMaxWidth(),
-
-                singleLine =
-                    true,
-
-                leadingIcon = {
-
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(
-                        imageVector =
-                            Icons.Default.Search,
-
-                        contentDescription =
-                            "Search"
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
-                },
-
-                placeholder = {
-
-                    Text(
-                        text =
-                            "Search payments..."
-                    )
-                },
-
-                shape =
-                    RoundedCornerShape(14.dp)
-            )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 12.dp)
+                    ) {
+                        if (uiState.searchText.isEmpty()) {
+                            Text(
+                                text = "Search payments...",
+                                style = TextStyle(
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            )
+                        }
+                        BasicTextField(
+                            value = uiState.searchText,
+                            onValueChange = {
+                                viewModel.onEvent(CustomerPaymentsEvent.SearchChanged(it))
+                            },
+                            textStyle = TextStyle(
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
         }
 
 
@@ -641,9 +668,7 @@ private fun PaymentSummarySection(
 
     totalPaid: Double,
 
-    pendingAmount: Double,
-
-    totalTransactions: Int
+    pendingAmount: Double
 
 ) {
 
@@ -676,21 +701,21 @@ private fun PaymentSummarySection(
 
                 value =
                     "RM %.2f".format(
-                        totalPaid
+                        pendingAmount
                     ),
 
                 label =
-                    "Total Paid",
+                    "Pending",
 
                 background =
                     MaterialTheme
                         .colorScheme
-                        .primaryContainer,
+                        .surface,
 
                 valueColor =
                     MaterialTheme
                         .colorScheme
-                        .primary,
+                        .onSurface,
 
                 modifier =
                     Modifier.weight(1f)
@@ -701,49 +726,26 @@ private fun PaymentSummarySection(
 
                 value =
                     "RM %.2f".format(
-                        pendingAmount
+                        totalPaid
                     ),
 
                 label =
-                    "Pending",
+                    "Total Received",
 
                 background =
                     MaterialTheme
                         .colorScheme
-                        .secondaryContainer,
+                        .surface,
 
                 valueColor =
                     MaterialTheme
                         .colorScheme
-                        .secondary,
+                        .onSurface,
 
                 modifier =
                     Modifier.weight(1f)
             )
         }
-
-
-        PaymentSummaryCard(
-
-            value =
-                totalTransactions.toString(),
-
-            label =
-                "Total Transactions",
-
-            background =
-                MaterialTheme
-                    .colorScheme
-                    .tertiaryContainer,
-
-            valueColor =
-                MaterialTheme
-                    .colorScheme
-                    .tertiary,
-
-            modifier =
-                Modifier.fillMaxWidth()
-        )
     }
 }
 
@@ -1108,7 +1110,14 @@ private fun CustomerPaymentCard(
             PaymentInfoRow(
                 label = "Method",
                 value =
-                    payment.method
+
+                    // Staff hasn't collected the payout
+                    // yet — no method chosen.
+                    if (
+                        payment.status ==
+                        "Pending"
+                    ) "N/A"
+                    else payment.method
             )
 
 
@@ -1222,11 +1231,6 @@ private fun PaymentStatusBadge(
                     .colorScheme
                     .secondaryContainer
 
-            "Failed" ->
-                MaterialTheme
-                    .colorScheme
-                    .errorContainer
-
             else ->
                 MaterialTheme
                     .colorScheme
@@ -1247,11 +1251,6 @@ private fun PaymentStatusBadge(
                 MaterialTheme
                     .colorScheme
                     .onSecondaryContainer
-
-            "Failed" ->
-                MaterialTheme
-                    .colorScheme
-                    .onErrorContainer
 
             else ->
                 MaterialTheme
@@ -1340,7 +1339,15 @@ private fun CustomerPaymentDetailsDialog(
 
         text = {
 
+            // Scrollable so the details stay reachable on
+            // landscape / short screens.
+
             Column(
+                modifier =
+                    Modifier.verticalScroll(
+                        rememberScrollState()
+                    ),
+
                 verticalArrangement =
                     Arrangement.spacedBy(10.dp)
             ) {
@@ -1386,7 +1393,14 @@ private fun CustomerPaymentDetailsDialog(
                 PaymentDetailRow(
                     label = "Payment Method",
                     value =
-                        payment.method
+
+                        // Pending = staff hasn't chosen
+                        // a payout method yet.
+                        if (
+                            payment.status ==
+                            "Pending"
+                        ) "N/A"
+                        else payment.method
                 )
 
                 PaymentDetailRow(

@@ -1,5 +1,6 @@
 package com.example.nekoeco.ui.staff
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,16 +14,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Inventory2
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -36,9 +35,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+import com.example.nekoeco.R
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -161,13 +164,26 @@ class StaffHomeViewModel : ViewModel() {
         // CONVERT CUSTOMER APPOINTMENTS TO STAFF APPOINTMENTS
         // ====================================================
 
+        // ====================================================
+        // Resolve customer names via the staff device list —
+        // it carries the REAL customer name from Supabase.
+        // The appointment's customerId alone is a raw UUID
+        // for any customer other than the current one.
+        // ====================================================
+
+        val customerNamesByDeviceId =
+            StaffDataStore.devices
+                .associate { it.id to it.customer }
+
+
         val staffAppointments =
             customerAppointments.map { appointment ->
 
                 val customerName =
-                    getCustomerName(
-                        appointment.customerId
-                    )
+                    customerNamesByDeviceId[appointment.deviceId]
+                        ?: getCustomerName(
+                            appointment.customerId
+                        )
 
 
                 StaffAppointment(
@@ -354,15 +370,9 @@ class StaffHomeViewModel : ViewModel() {
 @Composable
 fun StaffHomeScreen(
 
-    onDevicesClick: () -> Unit = {},
-
     onAppointmentsClick: () -> Unit = {},
 
-    onPaymentsClick: () -> Unit = {},
-
-    onViewAllDevicesClick: () -> Unit = {},
-
-    onLogout: () -> Unit = {},
+    onProfileClick: () -> Unit = {},
 
     viewModel: StaffHomeViewModel =
         viewModel()
@@ -376,10 +386,31 @@ fun StaffHomeScreen(
 
 
     // ========================================================
-    // REFRESH WHEN HOME OPENS
+    // Subscribe to CustomerDataStore.dataVersion in the
+    // composable body so Compose's snapshot system reliably
+    // tracks the read. Reading it here forces a recomposition
+    // on every change, which in turn re-evaluates the
+    // LaunchedEffect's key and fires the refresh.
     // ========================================================
 
-    LaunchedEffect(Unit) {
+    val dataVersion = CustomerDataStore.dataVersion
+    @Suppress("UNUSED_EXPRESSION")
+    dataVersion
+
+
+    // ========================================================
+    // REFRESH WHEN HOME IS OPENED
+    //
+    // Keyed on CustomerDataStore.dataVersion so we re-read
+    // our viewmodel snapshot every time the in-memory caches
+    // are repopulated — e.g. after CustomerDataStore.loadAll()
+    // completes on a cold launch while this screen is already
+    // mounted. A Unit key would fire only once, before the
+    // data arrives, leaving the dashboard at zeros until the
+    // user switches tabs.
+    // ========================================================
+
+    LaunchedEffect(CustomerDataStore.dataVersion) {
 
         viewModel.onEvent(
             StaffHomeEvent.RefreshHome
@@ -400,6 +431,9 @@ fun StaffHomeScreen(
                     MaterialTheme
                         .colorScheme
                         .background
+                )
+                .verticalScroll(
+                    rememberScrollState()
                 )
                 .padding(
                     horizontal = 20.dp,
@@ -445,7 +479,11 @@ fun StaffHomeScreen(
             Card(
 
                 modifier =
-                    Modifier.size(48.dp),
+                    Modifier
+                        .size(48.dp)
+                        .clickable {
+                            onProfileClick()
+                        },
 
                 shape =
                     CircleShape,
@@ -459,23 +497,22 @@ fun StaffHomeScreen(
                     )
             ) {
 
-                Icon(
+                Image(
 
-                    imageVector =
-                        Icons.Default.AccountCircle,
+                    painter =
+                        painterResource(
+                            R.drawable.profile_staff
+                        ),
 
                     contentDescription =
                         "Staff Profile",
 
-                    tint =
-                        MaterialTheme
-                            .colorScheme
-                            .primary,
+                    contentScale =
+                        ContentScale.Crop,
 
                     modifier =
                         Modifier
                             .fillMaxSize()
-                            .padding(2.dp)
                 )
             }
         }
@@ -492,7 +529,6 @@ fun StaffHomeScreen(
         // ====================================================
 
         Row(
-
             modifier =
                 Modifier.fillMaxWidth(),
 
@@ -501,56 +537,28 @@ fun StaffHomeScreen(
         ) {
 
             StaffStatCard(
-
-                title =
-                    "Appointments",
-
+                title = "Appointments",
                 value =
                     uiState
                         .appointmentCount
                         .toString(),
-
-                bottomText =
-                    "appointments",
-
-                icon =
-                    Icons.Default.CalendarMonth,
-
-                iconColor =
-                    EcoBlue,
-
-                iconBackground =
-                    EcoLightBlue,
-
-                modifier =
-                    Modifier.weight(1f)
+                icon = Icons.Default.CalendarMonth,
+                iconColor = EcoBlue,
+                iconBackground = EcoLightBlue,
+                modifier = Modifier.weight(1f)
             )
 
 
             StaffStatCard(
-
-                title =
-                    "Pending",
-
+                title = "Pending",
                 value =
                     uiState
                         .pendingDeviceCount
                         .toString(),
-
-                bottomText =
-                    "pending devices",
-
-                icon =
-                    Icons.Default.Inventory2,
-
-                iconColor =
-                    EcoPurple,
-
-                iconBackground =
-                    EcoLightPurple,
-
-                modifier =
-                    Modifier.weight(1f)
+                icon = Icons.Default.Inventory2,
+                iconColor = EcoPurple,
+                iconBackground = EcoLightPurple,
+                modifier = Modifier.weight(1f)
             )
         }
 
@@ -566,7 +574,6 @@ fun StaffHomeScreen(
         // ====================================================
 
         Row(
-
             modifier =
                 Modifier.fillMaxWidth(),
 
@@ -575,59 +582,29 @@ fun StaffHomeScreen(
         ) {
 
             StaffStatCard(
-
-                title =
-                    "Completed Pickups",
-
+                title = "Completed\nPickups",
                 value =
                     uiState
                         .completedPickupCount
                         .toString(),
-
-                bottomText =
-                    "completed",
-
-                icon =
-                    Icons.Default.TaskAlt,
-
-                iconColor =
-                    EcoGreen,
-
-                iconBackground =
-                    EcoLightGreen,
-
-                twoLineTitle =
-                    true,
-
-                modifier =
-                    Modifier.weight(1f)
+                icon = Icons.Default.TaskAlt,
+                iconColor = EcoGreen,
+                iconBackground = EcoLightGreen,
+                twoLineTitle = true,
+                modifier = Modifier.weight(1f)
             )
 
 
             StaffStatCard(
-
-                title =
-                    "Total Paid",
-
+                title = "Total Paid",
                 value =
-                    "RM %.0f".format(
+                    "RM %.2f".format(
                         uiState.totalPaid
                     ),
-
-                bottomText =
-                    "total payment",
-
-                icon =
-                    Icons.Default.CreditCard,
-
-                iconColor =
-                    EcoOrange,
-
-                iconBackground =
-                    EcoLightOrange,
-
-                modifier =
-                    Modifier.weight(1f)
+                icon = Icons.Default.CreditCard,
+                iconColor = EcoOrange,
+                iconBackground = EcoLightOrange,
+                modifier = Modifier.weight(1f)
             )
         }
 
@@ -710,158 +687,35 @@ fun StaffHomeScreen(
 
         } else {
 
-            LazyColumn(
+            Column(
 
                 modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .weight(
-                            1f,
-                            fill = false
-                        ),
+                    Modifier.fillMaxWidth(),
 
                 verticalArrangement =
                     Arrangement.spacedBy(10.dp)
             ) {
 
-                items(
+                uiState
+                    .upcomingPickups
+                    .forEach { appointment ->
 
-                    items =
-                        uiState
-                            .upcomingPickups,
+                        UpcomingPickupCard(
 
-                    key = {
+                            appointment =
+                                appointment,
 
-                        it.id
+                            // Tapping a pickup goes to the
+                            // Schedule tab.
+
+                            onClick =
+                                onAppointmentsClick
+                        )
                     }
-
-                ) { appointment ->
-
-                    UpcomingPickupCard(
-
-                        appointment =
-                            appointment
-                    )
-                }
             }
         }
 
 
-        // ====================================================
-        // LOGOUT
-        // ====================================================
-
-        Spacer(
-            modifier =
-                Modifier.height(24.dp)
-        )
-
-
-        Card(
-
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-
-                        onLogout()
-                    },
-
-            shape =
-                RoundedCornerShape(16.dp),
-
-            colors =
-                CardDefaults.cardColors(
-                    containerColor =
-                        MaterialTheme
-                            .colorScheme
-                            .surface
-                ),
-
-            elevation =
-                CardDefaults.cardElevation(
-                    defaultElevation =
-                        1.dp
-                )
-        ) {
-
-            Row(
-
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(18.dp),
-
-                verticalAlignment =
-                    Alignment.CenterVertically
-            ) {
-
-                Icon(
-
-                    imageVector =
-                        Icons.Default.Logout,
-
-                    contentDescription =
-                        "Logout",
-
-                    modifier =
-                        Modifier.size(27.dp),
-
-                    tint =
-                        MaterialTheme
-                            .colorScheme
-                            .error
-                )
-
-
-                Spacer(
-                    modifier =
-                        Modifier.width(15.dp)
-                )
-
-
-                Column {
-
-                    Text(
-
-                        text =
-                            "Logout",
-
-                        fontSize =
-                            16.sp,
-
-                        fontWeight =
-                            FontWeight.SemiBold,
-
-                        color =
-                            MaterialTheme
-                                .colorScheme
-                                .onSurface
-                    )
-
-
-                    Spacer(
-                        modifier =
-                            Modifier.height(2.dp)
-                    )
-
-
-                    Text(
-
-                        text =
-                            "Sign out of your account",
-
-                        fontSize =
-                            13.sp,
-
-                        color =
-                            MaterialTheme
-                                .colorScheme
-                                .onSurfaceVariant
-                    )
-                }
-            }
-        }
 
 
         Spacer(
@@ -883,8 +737,6 @@ private fun StaffStatCard(
 
     value: String,
 
-    bottomText: String,
-
     icon: ImageVector,
 
     iconColor: Color,
@@ -900,11 +752,14 @@ private fun StaffStatCard(
 
     Card(
 
+        // Same natural (content-driven) height as the
+        // customer summary cards — no fixed height.
+
         modifier =
-            modifier.height(145.dp),
+            modifier,
 
         shape =
-            RoundedCornerShape(18.dp),
+            RoundedCornerShape(16.dp),
 
         colors =
             CardDefaults.cardColors(
@@ -925,8 +780,8 @@ private fun StaffStatCard(
 
             modifier =
                 Modifier
-                    .fillMaxSize()
-                    .padding(14.dp)
+                    .fillMaxWidth()
+                    .padding(10.dp)
         ) {
 
             Row(
@@ -938,7 +793,7 @@ private fun StaffStatCard(
                     Arrangement.SpaceBetween,
 
                 verticalAlignment =
-                    Alignment.Top
+                    Alignment.CenterVertically
             ) {
 
                 Text(
@@ -957,7 +812,7 @@ private fun StaffStatCard(
                         },
 
                     fontSize =
-                        12.sp,
+                        13.sp,
 
                     color =
                         MaterialTheme
@@ -968,7 +823,7 @@ private fun StaffStatCard(
                         FontWeight.Medium,
 
                     lineHeight =
-                        15.sp,
+                        14.sp,
 
                     maxLines =
 
@@ -996,10 +851,10 @@ private fun StaffStatCard(
                 Card(
 
                     modifier =
-                        Modifier.size(46.dp),
+                        Modifier.size(36.dp),
 
                     shape =
-                        RoundedCornerShape(12.dp),
+                        RoundedCornerShape(10.dp),
 
                     colors =
                         CardDefaults.cardColors(
@@ -1025,7 +880,7 @@ private fun StaffStatCard(
 
             Spacer(
                 modifier =
-                    Modifier.height(12.dp)
+                    Modifier.height(6.dp)
             )
 
 
@@ -1035,7 +890,7 @@ private fun StaffStatCard(
                     value,
 
                 fontSize =
-                    25.sp,
+                    18.sp,
 
                 fontWeight =
                     FontWeight.Bold,
@@ -1044,27 +899,6 @@ private fun StaffStatCard(
                     MaterialTheme
                         .colorScheme
                         .onSurface
-            )
-
-
-            Spacer(
-                modifier =
-                    Modifier.height(4.dp)
-            )
-
-
-            Text(
-
-                text =
-                    bottomText,
-
-                fontSize =
-                    12.sp,
-
-                color =
-                    MaterialTheme
-                        .colorScheme
-                        .onSurfaceVariant
             )
         }
     }
@@ -1120,14 +954,20 @@ private fun BoxForIcon(
 @Composable
 private fun UpcomingPickupCard(
 
-    appointment: StaffAppointment
+    appointment: StaffAppointment,
+
+    onClick: () -> Unit
 
 ) {
 
     Card(
 
         modifier =
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                .clickable {
+                    onClick()
+                },
 
         shape =
             RoundedCornerShape(16.dp),
@@ -1284,7 +1124,7 @@ private fun UpcomingPickupCard(
                 Text(
 
                     text =
-                        appointment.customer,
+                        appointment.time,
 
                     fontSize =
                         13.sp,
@@ -1302,22 +1142,22 @@ private fun UpcomingPickupCard(
                 )
 
 
-                Text(
+            Text(
 
-                    text =
-                        appointment.time,
+                text =
+                    appointment.company,
 
-                    fontSize =
-                        12.sp,
+                fontSize =
+                    12.sp,
 
-                    color =
-                        MaterialTheme
-                            .colorScheme
-                            .primary,
+                color =
+                    MaterialTheme
+                        .colorScheme
+                        .primary,
 
-                    fontWeight =
-                        FontWeight.Medium
-                )
+                fontWeight =
+                    FontWeight.Medium
+            )
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.example.nekoeco.ui.staff
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,9 +16,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -191,7 +193,15 @@ sealed interface StaffAppointmentsEvent {
 // VIEWMODEL
 // ============================================================
 
-class StaffAppointmentsViewModel : ViewModel() {
+class StaffAppointmentsViewModel(
+
+    // Invoked after an appointment is successfully
+    // marked Completed — StaffMainScreen uses it to
+    // switch to the Payments tab for collection.
+    private val onAppointmentCompleted:
+            () -> Unit = {}
+
+) : ViewModel() {
 
     private val _uiState =
         MutableStateFlow(
@@ -446,6 +456,13 @@ class StaffAppointmentsViewModel : ViewModel() {
         refreshAppointments()
 
 
+        // Hand off to the Payments tab — the payment
+        // for this device stays Pending until the
+        // staff collects it there.
+
+        onAppointmentCompleted()
+
+
         _uiState.update {
 
             it.copy(
@@ -579,8 +596,16 @@ class StaffAppointmentsViewModel : ViewModel() {
 @Composable
 fun StaffAppointmentsScreen(
 
+    onCompletedGoToPayments:
+            () -> Unit = {},
+
     viewModel: StaffAppointmentsViewModel =
-        viewModel()
+        viewModel {
+            StaffAppointmentsViewModel(
+                onAppointmentCompleted =
+                    onCompletedGoToPayments
+            )
+        }
 
 ) {
 
@@ -616,6 +641,9 @@ fun StaffAppointmentsScreen(
                     MaterialTheme
                         .colorScheme
                         .background
+                )
+                .verticalScroll(
+                    rememberScrollState()
                 )
                 .padding(
                     horizontal = 20.dp
@@ -660,47 +688,57 @@ fun StaffAppointmentsScreen(
         )
 
 
-        OutlinedTextField(
-
-            value =
-                uiState.searchText,
-
-            onValueChange = {
-
-                viewModel.onEvent(
-                    StaffAppointmentsEvent
-                        .SearchChanged(it)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline,
+                    shape = RoundedCornerShape(14.dp)
                 )
-            },
-
-            modifier =
-                Modifier.fillMaxWidth(),
-
-            singleLine =
-                true,
-
-            shape =
-                RoundedCornerShape(14.dp),
-
-            placeholder = {
-
-                Text(
-                    text =
-                        "Search appointment"
-                )
-            },
-
-            leadingIcon = {
-
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Icon(
-                    imageVector =
-                        Icons.Default.Search,
-
-                    contentDescription =
-                        "Search"
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
                 )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp)
+                ) {
+                    if (uiState.searchText.isEmpty()) {
+                        Text(
+                            text = "Search appointment",
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                    }
+                    BasicTextField(
+                        value = uiState.searchText,
+                        onValueChange = {
+                            viewModel.onEvent(StaffAppointmentsEvent.SearchChanged(it))
+                        },
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
-        )
+        }
 
 
         Spacer(
@@ -820,51 +858,40 @@ fun StaffAppointmentsScreen(
         )
 
 
-        LazyColumn(
+        Column(
 
             modifier =
-                Modifier.fillMaxSize(),
+                Modifier.fillMaxWidth(),
 
             verticalArrangement =
                 Arrangement.spacedBy(12.dp)
         ) {
 
-            items(
+            filteredAppointments
+                .forEach { appointment ->
 
-                items =
-                    filteredAppointments,
+                    StaffAppointmentCard(
 
-                key = {
-                    it.id
+                        appointment =
+                            appointment,
+
+                        onClick = {
+
+                            viewModel.onEvent(
+                                StaffAppointmentsEvent
+                                    .AppointmentSelected(
+                                        appointment
+                                    )
+                            )
+                        }
+                    )
                 }
 
-            ) { appointment ->
 
-                StaffAppointmentCard(
-
-                    appointment =
-                        appointment,
-
-                    onClick = {
-
-                        viewModel.onEvent(
-                            StaffAppointmentsEvent
-                                .AppointmentSelected(
-                                    appointment
-                                )
-                        )
-                    }
-                )
-            }
-
-
-            item {
-
-                Spacer(
-                    modifier =
-                        Modifier.height(20.dp)
-                )
-            }
+            Spacer(
+                modifier =
+                    Modifier.height(20.dp)
+            )
         }
     }
 
@@ -963,6 +990,24 @@ fun StaffAppointmentsScreen(
 
                 Column {
 
+                    // =========================================
+                    // Compute the REAL tomorrow date — the
+                    // options below used to hardcode a fixed
+                    // "23 Aug 2026", so reschedules silently
+                    // wrote a stale date to Supabase and the
+                    // time appeared to revert after a
+                    // refresh.
+                    // =========================================
+
+                    val tomorrowDate =
+                        java.time.LocalDate.now()
+                            .plusDays(1)
+                            .format(
+                                java.time.format.DateTimeFormatter
+                                    .ofPattern("dd MMM yyyy")
+                            )
+
+
                     Text(
                         text =
                             "Choose a new time:"
@@ -977,17 +1022,17 @@ fun StaffAppointmentsScreen(
 
                     StaffRescheduleOption(
                         text =
-                            "Tomorrow · 10:00 AM"
+                            "Tomorrow ($tomorrowDate) · 10:00"
                     ) {
 
                         viewModel.onEvent(
                             StaffAppointmentsEvent
                                 .RescheduleAppointment(
                                     date =
-                                        "23 Aug 2026",
+                                        tomorrowDate,
 
                                     time =
-                                        "10:00 AM"
+                                        "10:00"
                                 )
                         )
                     }
@@ -995,17 +1040,17 @@ fun StaffAppointmentsScreen(
 
                     StaffRescheduleOption(
                         text =
-                            "Tomorrow · 2:00 PM"
+                            "Tomorrow ($tomorrowDate) · 14:00"
                     ) {
 
                         viewModel.onEvent(
                             StaffAppointmentsEvent
                                 .RescheduleAppointment(
                                     date =
-                                        "23 Aug 2026",
+                                        tomorrowDate,
 
                                     time =
-                                        "2:00 PM"
+                                        "14:00"
                                 )
                         )
                     }
@@ -1013,17 +1058,17 @@ fun StaffAppointmentsScreen(
 
                     StaffRescheduleOption(
                         text =
-                            "Tomorrow · 4:00 PM"
+                            "Tomorrow ($tomorrowDate) · 16:00"
                     ) {
 
                         viewModel.onEvent(
                             StaffAppointmentsEvent
                                 .RescheduleAppointment(
                                     date =
-                                        "23 Aug 2026",
+                                        tomorrowDate,
 
                                     time =
-                                        "4:00 PM"
+                                        "16:00"
                                 )
                         )
                     }
@@ -1248,7 +1293,7 @@ fun StaffAppointmentCard(
                     Text(
 
                         text =
-                            appointment.customer,
+                            appointment.device,
 
                         fontSize =
                             16.sp,
@@ -1261,7 +1306,7 @@ fun StaffAppointmentCard(
                     Text(
 
                         text =
-                            appointment.device,
+                            appointment.id,
 
                         fontSize =
                             12.sp,
@@ -1550,7 +1595,15 @@ fun StaffAppointmentDetailsDialog(
 
         text = {
 
-            Column {
+            // Scrollable so the details stay reachable on
+            // landscape / short screens.
+
+            Column(
+                modifier =
+                    Modifier.verticalScroll(
+                        rememberScrollState()
+                    )
+            ) {
 
                 StaffAppointmentDetail(
                     label = "Customer",

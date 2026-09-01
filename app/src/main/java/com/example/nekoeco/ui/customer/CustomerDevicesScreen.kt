@@ -1,6 +1,7 @@
 package com.example.nekoeco.ui.customer
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,10 +18,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Search
 
@@ -34,11 +37,14 @@ import androidx.compose.material3.Text
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,14 +67,25 @@ data class CustomerDevicesUiState(
 
     val searchText: String = "",
 
-    val selectedFilter: String = "All",
+    val selectedFilter: String = "All"
 
-    val devices: List<CustomerDevice> = emptyList()
+    // `devices` is intentionally NOT stored here. The
+    // viewmodel would otherwise hold a stale copy of
+    // CustomerDataStore.devices that wouldn't refresh
+    // when a device is deleted from the in-memory cache.
+    // Instead, the screen reads the source-of-truth list
+    // directly via `mutableStateListOf` snapshot observation.
 
 ) {
 
-    val filteredDevices: List<CustomerDevice>
-        get() =
+    companion object {
+
+        fun filteredDevices(
+            devices: List<CustomerDevice>,
+            searchText: String,
+            selectedFilter: String
+        ): List<CustomerDevice> =
+
             devices.filter { device ->
 
                 val searchMatch =
@@ -79,14 +96,14 @@ data class CustomerDevicesUiState(
                     ) ||
 
                             device.category.contains(
-                                searchText,
-                                ignoreCase = true
-                            ) ||
+                        searchText,
+                        ignoreCase = true
+                    ) ||
 
                             device.deviceId.contains(
-                                searchText,
-                                ignoreCase = true
-                            )
+                        searchText,
+                        ignoreCase = true
+                    )
 
 
                 val statusMatch =
@@ -97,6 +114,7 @@ data class CustomerDevicesUiState(
 
                 searchMatch && statusMatch
             }
+    }
 }
 
 
@@ -127,13 +145,19 @@ sealed interface CustomerDevicesEvent {
 
 class CustomerDevicesViewModel : ViewModel() {
 
+    // ========================================================
+    // The viewmodel no longer holds a `devices` snapshot. The
+    // list lives in CustomerDataStore.devices (a
+    // mutableStateListOf, so Compose tracks it directly), and
+    // the screen reads from there. This is what fixes the
+    // "deleted device still shows until logout" bug: any
+    // mutation to CustomerDataStore.devices is observed by
+    // every dependent composition immediately.
+    // ========================================================
+
     private val _uiState =
         MutableStateFlow(
-            CustomerDevicesUiState(
-                devices =
-                    CustomerDataStore
-                        .getCurrentCustomerDevices()
-            )
+            CustomerDevicesUiState()
         )
 
 
@@ -169,23 +193,12 @@ class CustomerDevicesViewModel : ViewModel() {
             }
 
 
-            CustomerDevicesEvent.RefreshDevices -> {
-
-                refreshDevices()
-            }
-        }
-    }
-
-
-    private fun refreshDevices() {
-
-        _uiState.update {
-
-            it.copy(
-                devices =
-                    CustomerDataStore
-                        .getCurrentCustomerDevices()
-            )
+            // RefreshDevices is now a no-op kept only for
+            // backwards-compatibility with any caller that
+            // still dispatches it. The screen no longer needs
+            // to be told to refresh — it observes the data
+            // store directly.
+            CustomerDevicesEvent.RefreshDevices -> Unit
         }
     }
 }
@@ -203,6 +216,8 @@ fun CustomerDevicesScreen(
 
     onDeviceClick: (CustomerDevice) -> Unit,
 
+    refreshKey: Any? = Unit,
+
     viewModel: CustomerDevicesViewModel =
         viewModel()
 
@@ -214,16 +229,79 @@ fun CustomerDevicesScreen(
         .collectAsStateWithLifecycle()
 
 
-    LaunchedEffect(Unit) {
+    // ========================================================
+    // Read the device list DIRECTLY from CustomerDataStore.
+    //
+    // CustomerDataStore.devices is a mutableStateListOf, so
+    // Compose's snapshot system observes every read here.
+    // When deleteDeviceByCustomer calls devices.removeAll,
+    // this `filteredDevices` expression invalidates and the
+    // list re-renders automatically. There is no snapshot
+    // in the viewmodel that can go stale.
+    //
+    // refreshKey is kept on the signature for backwards
+    // compatibility with the main screen wiring but is no
+    // longer used.
+    // ========================================================
 
-        viewModel.onEvent(
-            CustomerDevicesEvent.RefreshDevices
-        )
-    }
+    @Suppress("UNUSED_EXPRESSION")
+    refreshKey
+
+
+    // ========================================================
+    // Subscribe to CustomerDataStore.dataVersion. When
+    // loadForCustomer completes on app launch, the data
+    // store bumps the version and this read invalidates,
+    // forcing the filteredDevices expression to re-evaluate
+    // against the freshly populated devices list.
+    //
+    // Without this observation, the devices screen would
+    // render the initial empty list and stay empty until
+    // the user switched tabs (which remounts the screen
+    // and re-fires LaunchedEffect).
+    // ========================================================
+
+    val dataVersion = CustomerDataStore.dataVersion
+    @Suppress("UNUSED_EXPRESSION")
+    dataVersion
+
+
+    // ========================================================
+    // Wrap the derived list in derivedStateOf so Compose
+    // observes the FILTERED result, not just the raw list.
+    //
+    // Without this, the line below reads `devices.filter {…}`
+    // which returns a plain List. Compose's snapshot system
+    // tracks the read of `devices` (a SnapshotStateList) but
+    // does not re-read the filter result on every recompose.
+    // After a `devices.removeAll` the composition can end up
+    // holding a stale filtered list.
+    //
+    // derivedStateOf makes the filtered output a State<List>,
+    // so any change to the filter output — including a row
+    // being removed — triggers recomposition.
+    // ========================================================
+
+    val allDevices = remember {
+        derivedStateOf {
+            CustomerDataStore
+                .getCurrentCustomerDevices()
+        }
+    }.value
 
 
     val filteredDevices =
-        uiState.filteredDevices
+        remember(allDevices, uiState.searchText, uiState.selectedFilter) {
+
+            derivedStateOf {
+
+                CustomerDevicesUiState.filteredDevices(
+                    devices = allDevices,
+                    searchText = uiState.searchText,
+                    selectedFilter = uiState.selectedFilter
+                )
+            }.value
+        }
 
 
     Column(
@@ -232,6 +310,9 @@ fun CustomerDevicesScreen(
             .fillMaxSize()
             .background(
                 MaterialTheme.colorScheme.background
+            )
+            .verticalScroll(
+                rememberScrollState()
             )
             .padding(
                 horizontal = 20.dp
@@ -265,80 +346,57 @@ fun CustomerDevicesScreen(
         )
 
 
-        Button(
-
-            onClick = onAddDevice,
-
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp),
-
-            shape =
-                RoundedCornerShape(14.dp)
-
+                .height(48.dp)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline,
+                    shape = RoundedCornerShape(14.dp)
+                )
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.CenterStart
         ) {
-
-            Icon(
-                imageVector =
-                    Icons.Default.CameraAlt,
-                contentDescription =
-                    "AI Scan"
-            )
-
-
-            Spacer(
-                modifier = Modifier.width(8.dp)
-            )
-
-
-            Text(
-                text = "AI Scan Device",
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-
-        Spacer(
-            modifier = Modifier.height(16.dp)
-        )
-
-
-        OutlinedTextField(
-
-            value = uiState.searchText,
-
-            onValueChange = {
-
-                viewModel.onEvent(
-                    CustomerDevicesEvent
-                        .SearchChanged(it)
-                )
-            },
-
-            modifier =
-                Modifier.fillMaxWidth(),
-
-            singleLine = true,
-
-            shape =
-                RoundedCornerShape(14.dp),
-
-            placeholder = {
-                Text(
-                    text = "Search devices"
-                )
-            },
-
-            leadingIcon = {
-
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Icon(
-                    imageVector =
-                        Icons.Default.Search,
-                    contentDescription =
-                        "Search"
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
                 )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp)
+                ) {
+                    if (uiState.searchText.isEmpty()) {
+                        Text(
+                            text = "Search devices...",
+                            style = TextStyle(
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                    }
+                    BasicTextField(
+                        value = uiState.searchText,
+                        onValueChange = {
+                            viewModel.onEvent(CustomerDevicesEvent.SearchChanged(it))
+                        },
+                        textStyle = TextStyle(
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
-        )
+        }
 
 
         Spacer(
@@ -536,49 +594,38 @@ fun CustomerDevicesScreen(
 
         } else {
 
-            LazyColumn(
+            Column(
 
                 modifier =
-                    Modifier.fillMaxSize(),
+                    Modifier.fillMaxWidth(),
 
                 verticalArrangement =
                     Arrangement.spacedBy(12.dp)
 
             ) {
 
-                items(
+                filteredDevices
+                    .forEach { device ->
 
-                    items =
-                        filteredDevices,
+                        CustomerDeviceCard(
 
-                    key = {
-                        it.deviceId
+                            device =
+                                device,
+
+                            onClick = {
+
+                                onDeviceClick(
+                                    device
+                                )
+                            }
+                        )
                     }
 
-                ) { device ->
 
-                    CustomerDeviceCard(
-
-                        device =
-                            device,
-
-                        onClick = {
-
-                            onDeviceClick(
-                                device
-                            )
-                        }
-                    )
-                }
-
-
-                item {
-
-                    Spacer(
-                        modifier =
-                            Modifier.height(20.dp)
-                    )
-                }
+                Spacer(
+                    modifier =
+                        Modifier.height(20.dp)
+                )
             }
         }
     }

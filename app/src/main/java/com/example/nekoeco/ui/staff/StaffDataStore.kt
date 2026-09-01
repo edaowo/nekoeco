@@ -1,11 +1,24 @@
 package com.example.nekoeco.ui.staff
 
+import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 
+import com.example.nekoeco.data.db.AppointmentRepo
+import com.example.nekoeco.data.db.DeviceRepo
+import com.example.nekoeco.data.db.NewAppointmentRow
+import com.example.nekoeco.data.db.NewDeviceRow
+import com.example.nekoeco.data.db.NewPaymentRow
+import com.example.nekoeco.data.db.PaymentRepo
 import com.example.nekoeco.ui.customer.CustomerAppointment
 import com.example.nekoeco.ui.customer.CustomerDataStore
 import com.example.nekoeco.ui.customer.CustomerDevice
 import com.example.nekoeco.ui.customer.CustomerPayment
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.jsonPrimitive
 
 
 // ============================================================
@@ -16,7 +29,13 @@ data class StaffComponent(
     val name: String,
     var condition: String,
     var price: String,
-    var status: String
+    var status: String,
+
+    // Whether the company will recover this part —
+    // chosen via the inspection checkboxes on the
+    // staff device details screen. Defaults to true
+    // so pre-inspection devices show every part ticked.
+    var approved: Boolean = true
 )
 
 
@@ -51,7 +70,12 @@ data class StaffPayment(
     val appointmentId: String,
     val amount: String,
     var status: String,
-    val date: String
+    val date: String,
+
+    // How the customer was paid out — chosen by the
+    // staff during payment collection (Bank Transfer /
+    // Touch 'n Go / Cash).
+    val method: String = "Bank Transfer"
 )
 
 
@@ -77,6 +101,19 @@ data class StaffAppointment(
 // ============================================================
 
 object StaffDataStore {
+
+
+    // ========================================================
+    // PAYMENT COLLECTION HAND-OFF
+    //
+    // Set by completeAppointment when an appointment is
+    // marked Completed — StaffPaymentsScreen picks it up
+    // on entry, pre-opens that payment's collection
+    // dialog and clears it.
+    // ========================================================
+
+    var lastCollectedPaymentId:
+            String? = null
 
 
     // ========================================================
@@ -436,10 +473,11 @@ object StaffDataStore {
                     name = accessory.name,
                     condition = "Pending",
                     price =
-                        "RM %.0f".format(
+                        "RM %.2f".format(
                             accessory.price
                         ),
-                    status = "Pending"
+                    status = "Pending",
+                    approved = accessory.approved
                 )
             }
 
@@ -458,7 +496,7 @@ object StaffDataStore {
                     ),
 
                 recoveryValue =
-                    "RM %.0f".format(
+                    "RM %.2f".format(
                         device.recoveryValue
                     ),
 
@@ -584,6 +622,125 @@ object StaffDataStore {
             else ->
                 "Pending"
         }
+    }
+
+
+    // ========================================================
+    // APPROVE DEVICE WITH INSPECTION
+    //
+    // Called from the staff device details screen when the
+    // staff ticks which parts the company will actually
+    // recover and approves the device.
+    //
+    //  1. Marks each component's approved flag from the
+    //     selection and recomputes the device's recovery
+    //     value from ONLY the approved parts.
+    //  2. Persists the approved parts + new total into the
+    //     customer's device record (in-memory + Supabase)
+    //     via CustomerDataStore.updateDeviceInspection.
+    //  3. Runs the standard approval chain — the device's
+    //     appointment becomes "Scheduled" and its payment
+    //     is created from the updated recovery value.
+    // ========================================================
+
+    fun approveDeviceWithInspection(
+        deviceId: String,
+        approvedNames: Set<String>
+    ) {
+
+        val index =
+            devices.indexOfFirst {
+                it.id == deviceId
+            }
+
+
+        if (index == -1) {
+            return
+        }
+
+
+        val device =
+            devices[index]
+
+
+        if (device.components.isEmpty()) {
+
+            // Nothing to inspect (e.g. demo rows) —
+            // approve with the existing recovery value.
+
+            updateDeviceStatus(
+                deviceId = deviceId,
+                newStatus = "Approved"
+            )
+
+            return
+        }
+
+
+        val updatedComponents =
+            device.components.map { component ->
+
+                component.copy(
+                    approved =
+                        approvedNames.contains(
+                            component.name
+                        )
+                )
+            }
+
+
+        // New total = only the parts the company will
+        // recover. Prices are "RM x"-style strings.
+
+        val newTotal =
+            updatedComponents
+                .filter { it.approved }
+                .sumOf { component ->
+
+                    component.price
+                        .replace(
+                            Regex("[^0-9.]"),
+                            ""
+                        )
+                        .toDoubleOrNull()
+                        ?: 0.0
+                }
+
+
+        val updatedDevice =
+            device.copy(
+                recoveryValue =
+
+                    // %.2f keeps the sen — %.0f would
+                    // round the payout to whole ringgit.
+
+                    "RM %.2f".format(newTotal),
+
+                components =
+                    updatedComponents
+            )
+
+
+        devices[index] =
+            updatedDevice
+
+
+        // Persist the inspection result into the customer's
+        // device record BEFORE approving, so the payment
+        // created by the approval chain picks up the new
+        // total.
+
+        CustomerDataStore.updateDeviceInspection(
+            deviceId = deviceId,
+            approvedNames = approvedNames,
+            newTotal = newTotal
+        )
+
+
+        updateDeviceStatus(
+            deviceId = deviceId,
+            newStatus = "Approved"
+        )
     }
 
 
@@ -798,6 +955,34 @@ object StaffDataStore {
             activeAppointment != null
         ) {
 
+            // =================================================
+            // FLIP STAFF-SIDE COPY TO SCHEDULED
+            //
+            // updateAppointmentFromStaff below only updates the
+            // CUSTOMER's list. Without this, the staff copy
+            // stays "Pending" from the booking — and the staff
+            // Schedule tab hides Pending appointments, so the
+            // approved device's pickup never appears there.
+            // =================================================
+
+            val activeIndex =
+                appointments.indexOfFirst {
+                    it.id == activeAppointment.id
+                }
+
+
+            if (
+                activeIndex != -1
+            ) {
+
+                appointments[activeIndex] =
+                    appointments[activeIndex]
+                        .copy(
+                            status = "Scheduled"
+                        )
+            }
+
+
             updatePaymentForAppointment(
                 activeAppointment.id
             )
@@ -818,10 +1003,6 @@ object StaffDataStore {
                         "Scheduled"
                 )
 
-
-            syncCustomerScheduled(
-                device.id
-            )
 
             return
         }
@@ -877,10 +1058,6 @@ object StaffDataStore {
                 scheduledAppointment.id
             )
 
-
-            syncCustomerScheduled(
-                device.id
-            )
 
             return
         }
@@ -969,11 +1146,6 @@ object StaffDataStore {
         createPaymentForDevice(
             device = device,
             appointmentId = newId
-        )
-
-
-        syncCustomerScheduled(
-            device.id
         )
     }
 
@@ -1226,6 +1398,30 @@ object StaffDataStore {
             paymentIndex != -1
         ) {
 
+            // =================================================
+            // Sync the payout amount with the device's
+            // CURRENT recovery value — the staff inspection
+            // can change the approved total after the
+            // payment row was first created. Without this,
+            // a pending payment keeps the original amount.
+            // =================================================
+
+            val device =
+                devices.find {
+                    it.id ==
+                            appointment.deviceId
+                }
+
+
+            val newAmount =
+                device?.recoveryValue
+                    ?.replace(
+                        Regex("[^0-9.]"),
+                        ""
+                    )
+                    ?.toDoubleOrNull()
+
+
             payments[paymentIndex] =
                 payments[paymentIndex]
                     .copy(
@@ -1233,7 +1429,16 @@ object StaffDataStore {
                             appointmentId,
 
                         status =
-                            "Pending"
+                            "Pending",
+
+                        amount =
+
+                            newAmount
+                                ?.let {
+                                    "RM %.2f".format(it)
+                                }
+                                ?: payments[paymentIndex]
+                                    .amount
                     )
 
 
@@ -1243,7 +1448,10 @@ object StaffDataStore {
                         payments[paymentIndex].id,
 
                     newStatus =
-                        "Pending"
+                        "Pending",
+
+                    newAmount =
+                        newAmount
                 )
 
         } else {
@@ -1320,21 +1528,6 @@ object StaffDataStore {
 
 
     // ========================================================
-    // SYNC CUSTOMER -> SCHEDULED
-    // ========================================================
-
-    private fun syncCustomerScheduled(
-        deviceId: String
-    ) {
-
-        CustomerDataStore.updateDeviceStatus(
-            deviceId = deviceId,
-            newStatus = "Scheduled"
-        )
-    }
-
-
-    // ========================================================
     // DELETE DEVICE
     // STAFF SIDE ONLY
     // ========================================================
@@ -1354,6 +1547,21 @@ object StaffDataStore {
         ) {
             return
         }
+
+
+        // ====================================================
+        // SYNC CUSTOMER + SUPABASE
+        //
+        // CustomerDataStore.deleteDeviceFromStaff removes the
+        // device, its appointments and its payments from the
+        // customer's lists AND deletes all three rows from
+        // Supabase. Without this the delete only lasts until
+        // the next reload.
+        // ====================================================
+
+        CustomerDataStore.deleteDeviceFromStaff(
+            deviceId = id
+        )
 
 
         appointments.removeAll {
@@ -1381,7 +1589,8 @@ object StaffDataStore {
     // ========================================================
 
     fun markPaymentPaid(
-        paymentId: String
+        paymentId: String,
+        method: String
     ) {
 
         val index =
@@ -1399,14 +1608,20 @@ object StaffDataStore {
 
         payments[index] =
             payments[index].copy(
-                status = "Paid"
+                status = "Paid",
+
+                method =
+                    method
             )
 
 
         CustomerDataStore
             .updatePaymentStatusFromStaff(
                 paymentId = paymentId,
-                newStatus = "Paid"
+                newStatus = "Paid",
+
+                newMethod =
+                    method
             )
     }
 
@@ -1485,15 +1700,11 @@ object StaffDataStore {
         }
 
 
-        CustomerDataStore
-            .updateDeviceStatus(
-                deviceId =
-                    appointment.deviceId,
-
-                newStatus =
-                    "Scheduled"
-            )
-
+        // NOTE: the device is NOT overwritten with the
+        // appointment state ("Scheduled") — the device
+        // lifecycle (Pending / Approved / Rejected /
+        // Completed) is independent of the appointment
+        // lifecycle.
 
         updatePaymentForAppointment(
             id
@@ -1674,7 +1885,12 @@ object StaffDataStore {
 
 
         // ====================================================
-        // PAYMENT PAID
+        // PAYMENT — STAYS PENDING
+        //
+        // Completing the pickup does NOT pay the customer.
+        // The payment is collected on the Payments tab
+        // (method + Done), so here we only record which
+        // payment to hand off for collection.
         // ====================================================
 
         val paymentIndex =
@@ -1689,22 +1905,8 @@ object StaffDataStore {
             paymentIndex != -1
         ) {
 
-            val paymentId =
+            lastCollectedPaymentId =
                 payments[paymentIndex].id
-
-
-            payments[paymentIndex] =
-                payments[paymentIndex]
-                    .copy(
-                        status = "Paid"
-                    )
-
-
-            CustomerDataStore
-                .updatePaymentStatusFromStaff(
-                    paymentId = paymentId,
-                    newStatus = "Paid"
-                )
         }
     }
 
@@ -1782,15 +1984,11 @@ object StaffDataStore {
             )
 
 
-        CustomerDataStore
-            .updateDeviceStatus(
-                deviceId =
-                    appointment.deviceId,
-
-                newStatus =
-                    "Scheduled"
-            )
-
+        // NOTE: the device is NOT overwritten with the
+        // appointment state ("Scheduled") — the device
+        // lifecycle (Pending / Approved / Rejected /
+        // Completed) is independent of the appointment
+        // lifecycle.
 
         updatePaymentForAppointment(
             id
@@ -2011,6 +2209,216 @@ object StaffDataStore {
         devices.removeAll {
             it.id ==
                     deviceId
+        }
+
+
+        // ====================================================
+        // DELETE FROM SUPABASE
+        //
+        // The device's appointment and payment rows must go
+        // too, otherwise they come back as orphans on the
+        // next loadAll.
+        // ====================================================
+
+        try {
+
+            runBlocking {
+                DeviceRepo.instance.deleteDevice(deviceId)
+                AppointmentRepo.instance.deleteByDevice(deviceId)
+                PaymentRepo.instance.deleteByDevice(deviceId)
+            }
+        } catch (t: Throwable) {
+            Log.e("NekoEcoDB", "deleteDevice write-through failed", t)
+        }
+    }
+
+
+    // ========================================================
+    // LOAD ALL FROM SUPABASE
+    // ========================================================
+
+    fun loadAll() {
+
+        try {
+
+            runBlocking {
+
+                val deviceRows =
+                    DeviceRepo.instance.listAll()
+
+                devices.clear()
+
+                deviceRows.forEach { row ->
+
+                    val components =
+                        (row.accessories as? JsonArray)
+                            ?.mapNotNull { element ->
+
+                                val obj =
+                                    element as? JsonObject
+                                        ?: return@mapNotNull null
+
+                                    StaffComponent(
+                                        name      = obj["name"]?.jsonPrimitive?.content      ?: "",
+                                        condition = obj["condition"]?.jsonPrimitive?.content ?: "",
+                                        price     = obj["price"]?.jsonPrimitive?.content     ?: "",
+                                        status    = obj["status"]?.jsonPrimitive?.content    ?: "",
+                                        approved  = obj["approved"]?.jsonPrimitive?.booleanOrNull ?: true
+                                    )
+                            }
+                            ?: emptyList()
+
+
+                    devices.add(
+                        StaffDevice(
+                            id            = row.deviceId,
+                            deviceName    = row.deviceName,
+                            category      = row.category,
+                            customer      = row.customerName,
+                            date          = row.date,
+                            status        = row.status,
+                            recoveryValue = "RM %.2f".format(row.recoveryValue),
+                            components    = components
+                        )
+                    )
+                }
+
+
+                // ====================================================
+                // NAME HEALING
+                //
+                // Appointment/payment rows carry a COPIED
+                // device_name. Re-derive it from the device row
+                // so a rename (or legacy stale data) always
+                // displays the current name after a reload.
+                // The customer field gets the REAL customer name
+                // from the device row (device_name was being
+                // stuffed in there before).
+                // ====================================================
+
+                val deviceNamesById =
+                    deviceRows.associate {
+                        it.deviceId to it.deviceName
+                    }
+
+
+                val customerNamesById =
+                    deviceRows.associate {
+                        it.deviceId to it.customerName
+                    }
+
+
+                val apptRows =
+                    AppointmentRepo.instance.listAll()
+
+
+                // ====================================================
+                // ORPHAN CLEANUP
+                //
+                // Appointments whose device row no longer exists
+                // (left behind by deletes from older builds) are
+                // removed from Supabase and skipped below.
+                // ====================================================
+
+                val orphanApptDeviceIds =
+                    apptRows
+                        .map { it.deviceId }
+                        .filter {
+
+                            it.isNotBlank() &&
+                                    !deviceNamesById.containsKey(it)
+                        }
+                        .distinct()
+
+
+                if (
+                    orphanApptDeviceIds.isNotEmpty()
+                ) {
+
+                    try {
+
+                        orphanApptDeviceIds.forEach { deviceId ->
+
+                            AppointmentRepo.instance
+                                .deleteByDevice(deviceId)
+
+                            PaymentRepo.instance
+                                .deleteByDevice(deviceId)
+                        }
+
+                    } catch (t: Throwable) {
+
+                        Log.e(
+                            "NekoEcoDB",
+                            "orphan appointment cleanup failed",
+                            t
+                        )
+                    }
+                }
+
+
+                appointments.clear()
+
+                apptRows
+                    .filter {
+
+                        it.deviceId.isNotBlank() &&
+                                deviceNamesById.containsKey(it.deviceId)
+                    }
+                    .forEach { row ->
+
+                        appointments.add(
+                            StaffAppointment(
+                                id         = row.appointmentId,
+                                customer   = customerNamesById[row.deviceId]
+                                                 ?: row.deviceName,
+                                device     = deviceNamesById[row.deviceId]
+                                                 ?: row.deviceName,
+                                deviceId   = row.deviceId,
+                                company    = row.company,
+                                date       = row.date,
+                                time       = row.time,
+                                location   = row.location,
+                                status     = row.status
+                            )
+                        )
+                    }
+
+
+                val paymentRows =
+                    PaymentRepo.instance.listAll()
+
+                payments.clear()
+
+                paymentRows
+                    .filter {
+
+                        it.deviceId.isNotBlank() &&
+                                deviceNamesById.containsKey(it.deviceId)
+                    }
+                    .forEach { row ->
+
+                        payments.add(
+                            StaffPayment(
+                                id            = row.paymentId,
+                                deviceId      = row.deviceId,
+                                customer      = customerNamesById[row.deviceId]
+                                                  ?: row.deviceName,
+                                device        = deviceNamesById[row.deviceId]
+                                                  ?: row.deviceName,
+                                appointmentId = row.appointmentId ?: "",
+                                amount        = "RM %.2f".format(row.amount),
+                                status        = row.status,
+                                date          = row.date,
+                                method        = row.method
+                            )
+                        )
+                    }
+            }
+
+        } catch (t: Throwable) {
+
+            Log.e("NekoEcoDB", "loadAll failed", t)
         }
     }
 }

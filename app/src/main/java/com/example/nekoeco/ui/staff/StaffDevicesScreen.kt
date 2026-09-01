@@ -1,6 +1,7 @@
 package com.example.nekoeco.ui.staff
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,12 +16,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.Search
@@ -80,8 +81,12 @@ data class StaffDevicesUiState(
     val showDeleteDialog: Boolean =
         false,
 
-    val showStatusMenu: Boolean =
-        false
+    // Component names ticked in the inspection
+    // checkboxes for the device currently open in the
+    // details view. Seeded from the device's saved
+    // approved flags when it is selected.
+    val inspectionSelection: Set<String> =
+        emptySet()
 
 ) {
 
@@ -168,16 +173,22 @@ sealed interface StaffDevicesEvent {
     // STATUS
     // ========================================================
 
-    data object OpenStatusMenu :
-        StaffDevicesEvent
-
-
-    data object DismissStatusMenu :
-        StaffDevicesEvent
-
-
     data class StatusChanged(
         val status: String
+    ) : StaffDevicesEvent
+
+
+    // ========================================================
+    // INSPECTION
+    // ========================================================
+
+    data class InspectionToggled(
+        val componentName: String
+    ) : StaffDevicesEvent
+
+
+    data class InspectionSelectAll(
+        val selected: Boolean
     ) : StaffDevicesEvent
 
 
@@ -284,8 +295,15 @@ class StaffDevicesViewModel : ViewModel() {
                         showDeleteDialog =
                             false,
 
-                        showStatusMenu =
-                            false
+                        inspectionSelection =
+
+                            // Seed the checkboxes from the
+                            // device's saved approved flags.
+
+                            event.device.components
+                                .filter { it.approved }
+                                .map { it.name }
+                                .toSet()
                     )
                 }
             }
@@ -309,41 +327,6 @@ class StaffDevicesViewModel : ViewModel() {
                             "",
 
                         showDeleteDialog =
-                            false,
-
-                        showStatusMenu =
-                            false
-                    )
-                }
-            }
-
-
-            // =================================================
-            // OPEN STATUS MENU
-            // =================================================
-
-            StaffDevicesEvent.OpenStatusMenu -> {
-
-                _uiState.update {
-
-                    it.copy(
-                        showStatusMenu =
-                            true
-                    )
-                }
-            }
-
-
-            // =================================================
-            // DISMISS STATUS MENU
-            // =================================================
-
-            StaffDevicesEvent.DismissStatusMenu -> {
-
-                _uiState.update {
-
-                    it.copy(
-                        showStatusMenu =
                             false
                     )
                 }
@@ -359,6 +342,73 @@ class StaffDevicesViewModel : ViewModel() {
                 updateStatus(
                     event.status
                 )
+            }
+
+
+            // =================================================
+            // INSPECTION
+            // =================================================
+
+            is StaffDevicesEvent.InspectionToggled -> {
+
+                _uiState.update {
+
+                    val selection =
+                        it.inspectionSelection
+                            .toMutableSet()
+
+
+                    if (
+                        selection.contains(
+                            event.componentName
+                        )
+                    ) {
+
+                        selection.remove(
+                            event.componentName
+                        )
+
+                    } else {
+
+                        selection.add(
+                            event.componentName
+                        )
+                    }
+
+
+                    it.copy(
+                        inspectionSelection =
+                            selection
+                    )
+                }
+            }
+
+
+            is StaffDevicesEvent.InspectionSelectAll -> {
+
+                _uiState.update {
+
+                    val allNames =
+
+                        it.selectedDevice
+                            ?.components
+                            ?.map { component ->
+                                component.name
+                            }
+                            ?.toSet()
+                            ?: emptySet()
+
+
+                    it.copy(
+                        inspectionSelection =
+
+                            if (event.selected) {
+                                allNames
+                            } else {
+                                emptySet()
+                            }
+                    )
+                }
             }
 
 
@@ -457,10 +507,34 @@ class StaffDevicesViewModel : ViewModel() {
                 ?: return
 
 
-        StaffDataStore.updateDeviceStatus(
-            selectedDevice.id,
-            newStatus
-        )
+        if (
+            newStatus == "Approved" &&
+            selectedDevice.components.isNotEmpty()
+        ) {
+
+            // ================================================
+            // Approval always goes through the inspection
+            // selection: persist the ticked parts + their
+            // recomputed total first, then run the standard
+            // approval chain (appointment → Scheduled,
+            // payment created from the new total).
+            // ================================================
+
+            StaffDataStore.approveDeviceWithInspection(
+                deviceId =
+                    selectedDevice.id,
+
+                approvedNames =
+                    _uiState.value.inspectionSelection
+            )
+
+        } else {
+
+            StaffDataStore.updateDeviceStatus(
+                selectedDevice.id,
+                newStatus
+            )
+        }
 
 
         val latestDevices =
@@ -488,10 +562,7 @@ class StaffDevicesViewModel : ViewModel() {
                         ?: selectedDevice,
 
                 currentStatus =
-                    newStatus,
-
-                showStatusMenu =
-                    false
+                    newStatus
             )
         }
     }
@@ -514,27 +585,24 @@ class StaffDevicesViewModel : ViewModel() {
         )
 
 
-        _uiState.update {
+            _uiState.update {
 
-            it.copy(
-                devices =
-                    StaffDataStore
-                        .devices
-                        .toList(),
+                it.copy(
+                    devices =
+                        StaffDataStore
+                            .devices
+                            .toList(),
 
-                selectedDevice =
-                    null,
+                    selectedDevice =
+                        null,
 
-                currentStatus =
-                    "",
+                    currentStatus =
+                        "",
 
-                showDeleteDialog =
-                    false,
-
-                showStatusMenu =
-                    false
-            )
-        }
+                    showDeleteDialog =
+                        false
+                )
+            }
     }
 }
 
@@ -595,8 +663,8 @@ fun StaffDevicesScreen(
             showDeleteDialog =
                 uiState.showDeleteDialog,
 
-            showStatusMenu =
-                uiState.showStatusMenu,
+            inspectionSelection =
+                uiState.inspectionSelection,
 
             onEvent =
                 viewModel::onEvent
@@ -628,6 +696,9 @@ fun StaffDevicesScreen(
                     MaterialTheme
                         .colorScheme
                         .background
+                )
+                .verticalScroll(
+                    rememberScrollState()
                 )
                 .padding(
                     horizontal = 20.dp
@@ -677,100 +748,60 @@ fun StaffDevicesScreen(
 
 
         // ====================================================
-        // AI CAMERA BUTTON
-        // ====================================================
-
-        Button(
-
-            onClick =
-                onAiScanClick,
-
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-
-            shape =
-                RoundedCornerShape(14.dp)
-
-        ) {
-
-            Icon(
-                imageVector =
-                    Icons.Default.CameraAlt,
-
-                contentDescription =
-                    "AI Scan"
-            )
-
-
-            Spacer(
-                modifier =
-                    Modifier.width(8.dp)
-            )
-
-
-            Text(
-                text =
-                    "AI Scan Device",
-
-                fontWeight =
-                    FontWeight.Bold
-            )
-        }
-
-
-        Spacer(
-            modifier =
-                Modifier.height(16.dp)
-        )
-
-
-        // ====================================================
         // SEARCH
         // ====================================================
 
-        OutlinedTextField(
-
-            value =
-                uiState.searchText,
-
-            onValueChange = {
-
-                viewModel.onEvent(
-                    StaffDevicesEvent
-                        .SearchChanged(it)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline,
+                    shape = RoundedCornerShape(14.dp)
                 )
-            },
-
-            modifier =
-                Modifier.fillMaxWidth(),
-
-            singleLine =
-                true,
-
-            shape =
-                RoundedCornerShape(14.dp),
-
-            placeholder = {
-
-                Text(
-                    text =
-                        "Search devices"
-                )
-            },
-
-            leadingIcon = {
-
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Icon(
-                    imageVector =
-                        Icons.Default.Search,
-
-                    contentDescription =
-                        "Search"
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
                 )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp)
+                ) {
+                    if (uiState.searchText.isEmpty()) {
+                        Text(
+                            text = "Search devices",
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                    }
+                    BasicTextField(
+                        value = uiState.searchText,
+                        onValueChange = {
+                            viewModel.onEvent(StaffDevicesEvent.SearchChanged(it))
+                        },
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
-        )
+        }
 
 
         Spacer(
@@ -914,51 +945,40 @@ fun StaffDevicesScreen(
         // DEVICE LIST
         // ====================================================
 
-        LazyColumn(
+        Column(
 
             modifier =
-                Modifier.fillMaxSize(),
+                Modifier.fillMaxWidth(),
 
             verticalArrangement =
                 Arrangement.spacedBy(12.dp)
         ) {
 
-            items(
+            filteredDevices
+                .forEach { device ->
 
-                items =
-                    filteredDevices,
+                    DeviceCard(
 
-                key = {
-                    it.id
+                        device =
+                            device,
+
+                        onClick = {
+
+                            viewModel.onEvent(
+                                StaffDevicesEvent
+                                    .DeviceSelected(
+                                        device
+                                    )
+                            )
+                        }
+                    )
                 }
 
-            ) { device ->
 
-                DeviceCard(
-
-                    device =
-                        device,
-
-                    onClick = {
-
-                        viewModel.onEvent(
-                            StaffDevicesEvent
-                                .DeviceSelected(
-                                    device
-                                )
-                        )
-                    }
-                )
-            }
-
-
-            item {
-
-                Spacer(
-                    modifier =
-                        Modifier.height(20.dp)
-                )
-            }
+            Spacer(
+                modifier =
+                    Modifier.height(20.dp)
+            )
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.example.nekoeco.ui.staff
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,9 +14,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachMoney
@@ -29,6 +31,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 
@@ -72,7 +75,12 @@ data class StaffPaymentsUiState(
         null,
 
     val selectedDeviceCompleted: Boolean =
-        false
+        false,
+
+    // Payout method chosen in the collection dialog
+    // (Bank Transfer / Touch 'n Go / Cash).
+    val collectionMethod: String =
+        "Bank Transfer"
 
 ) {
 
@@ -169,6 +177,11 @@ sealed interface StaffPaymentsEvent {
 
     data object MarkPaid :
         StaffPaymentsEvent
+
+
+    data class CollectionMethodChanged(
+        val method: String
+    ) : StaffPaymentsEvent
 
 
     data object RefreshPayments :
@@ -279,6 +292,18 @@ class StaffPaymentsViewModel : ViewModel() {
             }
 
 
+            is StaffPaymentsEvent.CollectionMethodChanged -> {
+
+                _uiState.update {
+
+                    it.copy(
+                        collectionMethod =
+                            event.method
+                    )
+                }
+            }
+
+
             StaffPaymentsEvent.RefreshPayments -> {
 
                 refreshPayments()
@@ -301,7 +326,11 @@ class StaffPaymentsViewModel : ViewModel() {
 
 
         StaffDataStore.markPaymentPaid(
-            selectedPayment.id
+            paymentId =
+                selectedPayment.id,
+
+            method =
+                _uiState.value.collectionMethod
         )
 
 
@@ -369,6 +398,40 @@ class StaffPaymentsViewModel : ViewModel() {
             } ?: false
 
 
+        // ====================================================
+        // COMPLETION HAND-OFF
+        //
+        // completeAppointment records the payment to collect
+        // in StaffDataStore.lastCollectedPaymentId. On the
+        // first refresh after arriving on this tab, open
+        // that payment's collection dialog on the Pending
+        // filter, then clear the hand-off.
+        // ====================================================
+
+        val handOffId =
+
+            StaffDataStore
+                .lastCollectedPaymentId
+
+        val handOffPayment =
+
+            handOffId?.let { id ->
+
+                latestPayments.find {
+                    it.id == id
+                }
+            }
+
+
+        if (
+            handOffId != null
+        ) {
+
+            StaffDataStore.lastCollectedPaymentId =
+                null
+        }
+
+
         _uiState.update {
 
             it.copy(
@@ -377,10 +440,33 @@ class StaffPaymentsViewModel : ViewModel() {
                     latestPayments,
 
                 selectedPayment =
-                    latestSelected,
+
+                    handOffPayment
+                        ?: latestSelected,
 
                 selectedDeviceCompleted =
-                    deviceCompleted
+
+                    if (handOffPayment != null) {
+                        true
+                    } else {
+                        deviceCompleted
+                    },
+
+                selectedFilter =
+
+                    if (handOffPayment != null) {
+                        "Pending"
+                    } else {
+                        it.selectedFilter
+                    },
+
+                collectionMethod =
+
+                    if (handOffPayment != null) {
+                        "Bank Transfer"
+                    } else {
+                        it.collectionMethod
+                    }
             )
         }
     }
@@ -431,6 +517,9 @@ fun StaffPaymentsScreen(
                     MaterialTheme
                         .colorScheme
                         .background
+                )
+                .verticalScroll(
+                    rememberScrollState()
                 )
                 .padding(
                     horizontal = 20.dp
@@ -533,48 +622,57 @@ fun StaffPaymentsScreen(
         // SEARCH
         // ====================================================
 
-        OutlinedTextField(
-
-            value =
-                uiState.searchText,
-
-            onValueChange = {
-
-                viewModel.onEvent(
-                    StaffPaymentsEvent
-                        .SearchChanged(it)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline,
+                    shape = RoundedCornerShape(14.dp)
                 )
-            },
-
-            modifier =
-                Modifier.fillMaxWidth(),
-
-            singleLine =
-                true,
-
-            shape =
-                RoundedCornerShape(14.dp),
-
-            placeholder = {
-
-                Text(
-                    text =
-                        "Search payment"
-                )
-            },
-
-            leadingIcon = {
-
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Icon(
-
-                    imageVector =
-                        Icons.Default.Search,
-
-                    contentDescription =
-                        "Search"
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
                 )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp)
+                ) {
+                    if (uiState.searchText.isEmpty()) {
+                        Text(
+                            text = "Search payment",
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                    }
+                    BasicTextField(
+                        value = uiState.searchText,
+                        onValueChange = {
+                            viewModel.onEvent(StaffPaymentsEvent.SearchChanged(it))
+                        },
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
-        )
+        }
 
 
         Spacer(
@@ -682,51 +780,40 @@ fun StaffPaymentsScreen(
         // PAYMENT LIST
         // ====================================================
 
-        LazyColumn(
+        Column(
 
             modifier =
-                Modifier.fillMaxSize(),
+                Modifier.fillMaxWidth(),
 
             verticalArrangement =
                 Arrangement.spacedBy(12.dp)
         ) {
 
-            items(
+            filteredPayments
+                .forEach { payment ->
 
-                items =
-                    filteredPayments,
+                    PaymentCard(
 
-                key = {
-                    it.id
+                        payment =
+                            payment,
+
+                        onClick = {
+
+                            viewModel.onEvent(
+                                StaffPaymentsEvent
+                                    .PaymentSelected(
+                                        payment
+                                    )
+                            )
+                        }
+                    )
                 }
 
-            ) { payment ->
 
-                PaymentCard(
-
-                    payment =
-                        payment,
-
-                    onClick = {
-
-                        viewModel.onEvent(
-                            StaffPaymentsEvent
-                                .PaymentSelected(
-                                    payment
-                                )
-                        )
-                    }
-                )
-            }
-
-
-            item {
-
-                Spacer(
-                    modifier =
-                        Modifier.height(20.dp)
-                )
-            }
+            Spacer(
+                modifier =
+                    Modifier.height(20.dp)
+            )
         }
     }
 
@@ -750,6 +837,19 @@ fun StaffPaymentsScreen(
 
             deviceCompleted =
                 uiState.selectedDeviceCompleted,
+
+            selectedMethod =
+                uiState.collectionMethod,
+
+            onMethodChanged = { method ->
+
+                viewModel.onEvent(
+                    StaffPaymentsEvent
+                        .CollectionMethodChanged(
+                            method
+                        )
+                )
+            },
 
             onDismiss = {
 
@@ -1041,7 +1141,7 @@ fun PaymentCard(
                     Text(
 
                         text =
-                            payment.customer,
+                            payment.device,
 
                         fontSize =
                             16.sp,
@@ -1054,7 +1154,7 @@ fun PaymentCard(
                     Text(
 
                         text =
-                            payment.device,
+                            payment.id,
 
                         fontSize =
                             12.sp,
@@ -1095,6 +1195,20 @@ fun PaymentCard(
 
                 value =
                     payment.date
+            )
+
+
+            PaymentInfoRow(
+                label =
+                    "Method",
+
+                value =
+
+                    if (
+                        payment.status ==
+                        "Pending"
+                    ) "N/A"
+                    else payment.method
             )
 
 
@@ -1301,6 +1415,11 @@ fun PaymentDetailsDialog(
 
     deviceCompleted: Boolean,
 
+    // Payout method currently selected in the picker.
+    selectedMethod: String,
+
+    onMethodChanged: (String) -> Unit,
+
     onDismiss: () -> Unit,
 
     onMarkPaid: () -> Unit
@@ -1326,7 +1445,15 @@ fun PaymentDetailsDialog(
 
         text = {
 
-            Column {
+            // Scrollable so the details stay reachable on
+            // landscape / short screens.
+
+            Column(
+                modifier =
+                    Modifier.verticalScroll(
+                        rememberScrollState()
+                    )
+            ) {
 
                 PaymentDetail(
                     label =
@@ -1382,6 +1509,24 @@ fun PaymentDetailsDialog(
                 )
 
 
+                PaymentDetail(
+                    label =
+                        "Method",
+
+                    // Pending payments haven't been
+                    // collected yet — show N/A so the
+                    // staff clearly sees no method has
+                    // been chosen.
+                    value =
+
+                        if (
+                            payment.status ==
+                            "Pending"
+                        ) "N/A"
+                        else payment.method
+                )
+
+
                 Spacer(
                     modifier =
                         Modifier.height(15.dp)
@@ -1396,6 +1541,77 @@ fun PaymentDetailsDialog(
                     if (
                         deviceCompleted
                     ) {
+
+                        // =====================================
+                        // PAYMENT METHOD PICKER
+                        //
+                        // How the company pays the customer
+                        // for the recovered parts.
+                        // =====================================
+
+                        Text(
+                            text =
+                                "Payment Method",
+
+                            fontSize =
+                                13.sp,
+
+                            fontWeight =
+                                FontWeight.Bold
+                        )
+
+
+                        Spacer(
+                            modifier =
+                                Modifier.height(6.dp)
+                        )
+
+
+                        listOf(
+                            "Bank Transfer",
+                            "Touch 'n Go",
+                            "Cash"
+                        ).forEach { method ->
+
+                            Row(
+                                modifier =
+                                    Modifier.fillMaxWidth(),
+
+                                verticalAlignment =
+                                    Alignment.CenterVertically
+                            ) {
+
+                                RadioButton(
+                                    selected =
+
+                                        selectedMethod ==
+                                                method,
+
+                                    onClick = {
+
+                                        onMethodChanged(
+                                            method
+                                        )
+                                    }
+                                )
+
+
+                                Text(
+                                    text =
+                                        method,
+
+                                    fontSize =
+                                        14.sp
+                                )
+                            }
+                        }
+
+
+                        Spacer(
+                            modifier =
+                                Modifier.height(12.dp)
+                        )
+
 
                         Button(
 
@@ -1423,7 +1639,7 @@ fun PaymentDetailsDialog(
 
                             Text(
                                 text =
-                                    "Mark as Paid"
+                                    "Done"
                             )
                         }
 

@@ -305,9 +305,13 @@ fun AiResultScreen(
 
                 // =================================================
                 // SAVE DEVICE
+                //
+                // Booking is only offered for electronic /
+                // electrical devices — a non-electrical object
+                // cannot be booked for pickup.
                 // =================================================
 
-                if (isCustomer) {
+                if (isCustomer && result.device.isElectronic) {
 
                     item {
 
@@ -364,6 +368,38 @@ fun AiResultScreen(
                                     15.sp
                             )
                         }
+                    }
+                }
+
+
+                if (isCustomer && !result.device.isElectronic) {
+
+                    item {
+
+                        Spacer(
+                            modifier =
+                                Modifier.height(2.dp)
+                        )
+
+                        Text(
+
+                            text =
+                                "This is not an electrical device, so it cannot be booked for a pickup.",
+
+                            fontSize =
+                                13.sp,
+
+                            fontWeight =
+                                FontWeight.Medium,
+
+                            color =
+                                MaterialTheme
+                                    .colorScheme
+                                    .onSurfaceVariant,
+
+                            modifier =
+                                Modifier.fillMaxWidth()
+                        )
                     }
                 }
 

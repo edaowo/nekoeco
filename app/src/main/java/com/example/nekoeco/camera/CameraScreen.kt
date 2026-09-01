@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -240,6 +241,18 @@ fun CameraScreen(
     // ======================================================
 
     Scaffold(
+
+        // ==================================================
+        // EDGE-TO-EDGE CONTENT
+        //
+        // No system-bar insets — the camera preview must
+        // fill the whole screen in every orientation
+        // (otherwise the scaffold colour shows as a strip
+        // beside the cutout in landscape).
+        // ==================================================
+
+        contentWindowInsets =
+            WindowInsets(0.dp),
 
         // ==================================================
         // TOP BAR

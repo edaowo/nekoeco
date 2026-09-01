@@ -22,6 +22,12 @@ object GeminiPrompt {
           metal/glass in good condition = High; mixed plastics or badly
           damaged = Low). This is about the device's materials, NOT
           about your confidence in identifying it.
+        - isElectronic — true if the object is actually an electronic
+          or electrical device; false if it is not (food, furniture,
+          clothing, plants, general waste, etc.). If it is false,
+          still return your best-guess device name and leave the
+          parts list empty. The app will not allow a pickup booking
+          for non-electrical objects.
 
         Then identify components or accessories that may be
         recoverable or sellable from this device.
@@ -83,7 +89,8 @@ object GeminiPrompt {
             "condition": "",
             "confidence": 0.0,
             "estimatedWeight": 0.0,
-            "recyclability": ""
+            "recyclability": "",
+            "isElectronic": true
           },
           "parts": [
             {

@@ -37,6 +37,7 @@ import androidx.compose.runtime.getValue
 
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -72,9 +73,26 @@ data class CustomerDeviceDetailsUiState(
 ) {
 
     val canDelete: Boolean
-        get() =
-            device?.status == "Pending" ||
-                    device?.status == "Rejected"
+        get() {
+
+            val d = device ?: return false
+
+            if (d.status == "Pending" || d.status == "Rejected") {
+                return true
+            }
+
+            if (d.status == "Approved") {
+
+                return CustomerDataStore.appointments
+                    .filter {
+                        it.deviceId == d.deviceId &&
+                                it.customerId == d.customerId
+                    }
+                    .all { it.status == "Cancelled" }
+            }
+
+            return false
+        }
 
 
     val canEditName: Boolean
@@ -375,10 +393,7 @@ class CustomerDeviceDetailsViewModel : ViewModel() {
                 ?: return
 
 
-        if (
-            device.status != "Pending" &&
-            device.status != "Rejected"
-        ) {
+        if (!uiState.value.canDelete) {
 
             return
         }
@@ -389,10 +404,24 @@ class CustomerDeviceDetailsViewModel : ViewModel() {
         )
 
 
+        // =====================================================
+        // Mark the delete as done, but DO NOT clear `device`.
+        // Clearing it would leave the screen body blank for
+        // one frame between the confirm and the navigation
+        // pop, which the user perceives as a glitch.
+        //
+        // Instead we keep `device` populated so the body
+        // continues to render the device details. The
+        // LaunchedEffect on deviceDeleted triggers navigation
+        // back to the devices list, which renders without
+        // the deleted row — so the user sees a smooth
+        // transition: details -> list, with the row already
+        // gone.
+        // =====================================================
+
         _uiState.update {
 
             it.copy(
-                device = null,
                 showDeleteDialog = false,
                 deviceDeleted = true
             )
@@ -797,15 +826,32 @@ fun CustomerDeviceDetailsScreen(
                             .accessories
                             .forEach { accessory ->
 
+                                val approved =
+                                    accessory.approved
+
+
                                 CustomerDeviceDetailRow(
 
                                     label =
                                         accessory.name,
 
                                     value =
-                                        "RM %.2f".format(
-                                            accessory.price
-                                        )
+                                        (if (approved) "✓ " else "✗ ") +
+                                                "RM %.2f".format(
+                                                    accessory.price
+                                                ),
+
+                                    valueColor =
+
+                                        if (approved) {
+                                            MaterialTheme
+                                                .colorScheme
+                                                .primary
+                                        } else {
+                                            MaterialTheme
+                                                .colorScheme
+                                                .error
+                                        }
                                 )
                             }
                     }
@@ -1167,7 +1213,12 @@ private fun CustomerDeviceDetailRow(
 
     label: String,
 
-    value: String
+    value: String,
+
+    // Optional override for the value text color —
+    // used to tint part rows by inspection approval.
+    // Leave unspecified for the default styling.
+    valueColor: Color = Color.Unspecified
 
 ) {
 
@@ -1206,7 +1257,10 @@ private fun CustomerDeviceDetailRow(
                 12.sp,
 
             fontWeight =
-                FontWeight.SemiBold
+                FontWeight.SemiBold,
+
+            color =
+                valueColor
         )
     }
 }

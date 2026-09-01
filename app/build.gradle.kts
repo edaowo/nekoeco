@@ -1,7 +1,34 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
+
+
+// ==========================================================
+// Load secrets from local.properties so they're available as
+// project properties for buildConfigField below. local.properties
+// is git-ignored, unlike gradle.properties.
+//
+// project.findProperty() alone would NOT see them — Gradle
+// only auto-loads gradle.properties into project properties.
+// ==========================================================
+
+
+val localProperties: Properties = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) {
+        f.inputStream().use { stream -> load(stream) }
+    }
+}
+
+fun localProp(key: String): String =
+    localProperties.getProperty(key)
+        ?: project.findProperty(key)?.toString()
+        ?: ""
+
 
 android {
     namespace = "com.example.nekoeco"
@@ -20,12 +47,6 @@ android {
 
         testInstrumentationRunner =
             "androidx.test.runner.AndroidJUnitRunner"
-
-        buildConfigField(
-            "String",
-            "GEMINI_API_KEY",
-            "\"${project.findProperty("GEMINI_API_KEY") ?: ""}\""
-        )
     }
 
     buildTypes {
@@ -41,10 +62,18 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
-    buildFeatures {
-        compose = true
-        buildConfig = true
-    }
+buildFeatures {
+    compose = true
+    buildConfig = true
+}
+
+
+// ==========================================
+// Kotlin: skip metadata-version check so the
+// Supabase SDK (built with Kotlin 2.1.20) can be
+// consumed from a project on Kotlin 2.2.10.
+// ==========================================
+
 }
 
 dependencies {
@@ -123,6 +152,16 @@ dependencies {
 
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation(libs.androidx.ui)
+
+
+    // ==========================================
+    // Supabase (Postgrest only — no Auth module)
+    // ==========================================
+
+    implementation(platform("io.github.jan-tennert.supabase:bom:${libs.versions.supabase.get()}"))
+    implementation(libs.supabase.core)
+    implementation(libs.supabase.postgrest)
+    implementation(libs.ktor.client.android)
 
 
     // ==========================================
